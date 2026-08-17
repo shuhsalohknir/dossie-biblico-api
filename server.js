@@ -53,6 +53,7 @@ const avisoSchema = new mongoose.Schema({
   titulo: String,
   texto: String,
   link: { type: String, default: '' },
+  video: { type: String, default: '' },
   data: { type: String, default: '' }
 }, { timestamps: true });
 const Aviso = mongoose.model('Aviso', avisoSchema);
@@ -243,6 +244,38 @@ app.post('/api/posts/:id/comentar', auth, async (req, res) => {
   }
 });
 
+// FEED - editar (só o autor)
+app.put('/api/posts/:id', auth, async (req, res) => {
+  try {
+    const post = await Post.findById(req.params.id);
+    if (!post) return res.status(404).json({ erro: 'Post não encontrado' });
+    if (String(post.autorId) !== String(req.userId)) {
+      return res.status(403).json({ erro: 'Você só pode editar seus posts' });
+    }
+    if (req.body.texto !== undefined) post.texto = req.body.texto;
+    if (req.body.imagem !== undefined) post.imagem = req.body.imagem;
+    await post.save();
+    res.json({ ok: true, post });
+  } catch (e) {
+    res.status(500).json({ erro: 'Erro ao editar post' });
+  }
+});
+
+// FEED - excluir (só o autor)
+app.delete('/api/posts/:id', auth, async (req, res) => {
+  try {
+    const post = await Post.findById(req.params.id);
+    if (!post) return res.status(404).json({ erro: 'Post não encontrado' });
+    if (String(post.autorId) !== String(req.userId)) {
+      return res.status(403).json({ erro: 'Você só pode excluir seus posts' });
+    }
+    await post.deleteOne();
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(500).json({ erro: 'Erro ao excluir post' });
+  }
+});
+
 // RANKING
 app.get('/api/ranking', auth, async (req, res) => {
   try {
@@ -250,7 +283,6 @@ app.get('/api/ranking', auth, async (req, res) => {
       .select('nome foto pontos email')
       .sort({ pontos: -1 })
       .limit(50);
-
     const ranking = users.map(function(u) {
       return {
         id: u._id,
@@ -260,7 +292,6 @@ app.get('/api/ranking', auth, async (req, res) => {
         email: u.email
       };
     });
-
     res.json({ ok: true, ranking });
   } catch (e) {
     res.status(500).json({ erro: 'Erro ao carregar ranking' });
@@ -280,7 +311,7 @@ app.get('/api/avisos', auth, async (req, res) => {
 // AVISOS - criar
 app.post('/api/avisos', auth, async (req, res) => {
   try {
-    const { titulo, texto, link } = req.body;
+    const { titulo, texto, link, video } = req.body;
     if (!titulo || !texto) {
       return res.status(400).json({ erro: 'Título e texto são obrigatórios' });
     }
@@ -288,6 +319,7 @@ app.post('/api/avisos', auth, async (req, res) => {
       titulo,
       texto,
       link: link || '',
+      video: video || '',
       data: new Date().toLocaleString('pt-BR')
     });
     res.json({ ok: true, aviso });
