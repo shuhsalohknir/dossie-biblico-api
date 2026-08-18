@@ -13,6 +13,14 @@ mongoose.connect(process.env.MONGO_URL)
   .then(() => console.log('MongoDB conectado'))
   .catch(err => console.log('Erro MongoDB:', err));
 
+// =========================
+// ADMIN
+// =========================
+const ADMIN_EMAILS = [
+  'shuhsalohknir@gmail.com',
+  'pablosyziz@gmail.com'
+];
+
 const userSchema = new mongoose.Schema({
   nome: String,
   email: { type: String, unique: true },
@@ -50,11 +58,13 @@ const postSchema = new mongoose.Schema({
 const Post = mongoose.model('Post', postSchema);
 
 const avisoSchema = new mongoose.Schema({
-  titulo: String,
-  texto: String,
+  titulo: { type: String, default: '' },
+  texto: { type: String, default: '' },
   link: { type: String, default: '' },
   video: { type: String, default: '' },
-  data: { type: String, default: '' }
+  data: { type: String, default: '' },
+  autorId: String,
+  autorNome: String
 }, { timestamps: true });
 const Aviso = mongoose.model('Aviso', avisoSchema);
 
@@ -69,6 +79,15 @@ function auth(req, res, next) {
   } catch (e) {
     return res.status(401).json({ erro: 'Token inválido' });
   }
+}
+
+async function isAdmin(userId) {
+  const user = await User.findById(userId);
+  if (!user) return false;
+  const email = String(user.email || '').toLowerCase();
+  return ADMIN_EMAILS
+    .map(e => e.toLowerCase())
+    .includes(email);
 }
 
 function formatUser(user) {
@@ -298,7 +317,7 @@ app.get('/api/ranking', auth, async (req, res) => {
   }
 });
 
-// AVISOS - listar
+// AVISOS - listar (todos logados)
 app.get('/api/avisos', auth, async (req, res) => {
   try {
     const avisos = await Aviso.find().sort({ createdAt: -1 }).limit(50);
@@ -308,23 +327,90 @@ app.get('/api/avisos', auth, async (req, res) => {
   }
 });
 
-// AVISOS - criar
+// AVISOS - criar (somente admin)
 app.post('/api/avisos', auth, async (req, res) => {
   try {
-    const { titulo, texto, link, video } = req.body;
+    if (!(await isAdmin(req.userId))) {
+      return res.status(403).json({ erro: 'Apenas o administrador pode publicar avisos' });
+    }
+
+    const user = await User.findById(req.userId);
+    if (!user) return res.status(404).json({ erro: 'Usuário não encontrado' });
+
+    const titulo = (req.body.titulo || '').trim();
+    const texto = (req.body.texto || '').trim();
+    const link = (req.body.link || '').trim();
+    const video = (req.body.video || '').trim();
+
     if (!titulo || !texto) {
       return res.status(400).json({ erro: 'Título e texto são obrigatórios' });
     }
+
     const aviso = await Aviso.create({
       titulo,
       texto,
-      link: link || '',
-      video: video || '',
-      data: new Date().toLocaleString('pt-BR')
+      link,
+      video,
+      data: new Date().toLocaleString('pt-BR'),
+      autorId: String(user._id),
+      autorNome: user.nome
     });
+
     res.json({ ok: true, aviso });
   } catch (e) {
+    console.log(e);
     res.status(500).json({ erro: 'Erro ao criar aviso' });
+  }
+});
+
+// AVISOS - editar (somente admin)
+app.put('/api/avisos/:id', auth, async (req, res) => {
+  try {
+    if (!(await isAdmin(req.userId))) {
+      return res.status(403).json({ erro: 'Apenas o administrador pode editar avisos' });
+    }
+
+    const update = {
+      data: new Date().toLocaleString('pt-BR') + ' (editado)'
+    };
+
+    if (req.body.titulo !== undefined) update.titulo = String(req.body.titulo || '').trim();
+    if (req.body.texto !== undefined) update.texto = String(req.body.texto || '').trim();
+    if (req.body.link !== undefined) update.link = String(req.body.link || '').trim();
+    if (req.body.video !== undefined) update.video = String(req.body.video || '').trim();
+
+    if (!update.titulo || !update.texto) {
+      return res.status(400).json({ erro: 'Título e texto são obrigatórios' });
+    }
+
+    const aviso = await Aviso.findByIdAndUpdate(
+      req.params.id,
+      { $set: update },
+      { new: true }
+    );
+
+    if (!aviso) return res.status(404).json({ erro: 'Aviso não encontrado' });
+    res.json({ ok: true, aviso });
+  } catch (e) {
+    console.log(e);
+    res.status(500).json({ erro: 'Erro ao editar aviso' });
+  }
+});
+
+// AVISOS - excluir (somente admin)
+app.delete('/api/avisos/:id', auth, async (req, res) => {
+  try {
+    if (!(await isAdmin(req.userId))) {
+      return res.status(403).json({ erro: 'Apenas o administrador pode excluir avisos' });
+    }
+
+    const aviso = await Aviso.findByIdAndDelete(req.params.id);
+    if (!aviso) return res.status(404).json({ erro: 'Aviso não encontrado' });
+
+    res.json({ ok: true });
+  } catch (e) {
+    console.log(e);
+    res.status(500).json({ erro: 'Erro ao excluir aviso' });
   }
 });
 
