@@ -480,6 +480,63 @@ app.post('/api/notificacoes/ler', auth, async (req, res) => {
   }
 });
 
+// DOAÇÃO DE PONTOS → vai para o admin da plataforma
+app.post('/api/doar', auth, async (req, res) => {
+  try {
+    const pontos = Math.floor(Number(req.body.pontos || 0));
+    if (!pontos || pontos < 1) {
+      return res.status(400).json({ erro: 'Informe uma quantidade válida de pontos' });
+    }
+
+    const doador = await User.findById(req.userId);
+    if (!doador) return res.status(404).json({ erro: 'Usuário não encontrado' });
+
+    if ((doador.pontos || 0) < pontos) {
+      return res.status(400).json({ erro: 'Pontos insuficientes' });
+    }
+
+    // Conta da plataforma = primeiro admin cadastrado
+    const adminEmails = ADMIN_EMAILS.map(e => e.toLowerCase());
+    const admin = await User.findOne({ email: { $in: adminEmails } });
+    if (!admin) {
+      return res.status(500).json({ erro: 'Conta da plataforma não encontrada' });
+    }
+
+    // Não deixa doar para si mesmo (se o admin doar)
+    if (String(admin._id) === String(doador._id)) {
+      return res.status(400).json({ erro: 'A conta da plataforma não pode doar para si mesma' });
+    }
+
+    // Transfere
+    doador.pontos = (doador.pontos || 0) - pontos;
+    admin.pontos = (admin.pontos || 0) + pontos;
+
+    await doador.save();
+    await admin.save();
+
+    // Notifica o admin
+    await Notificacao.create({
+      paraId: String(admin._id),
+      deId: String(doador._id),
+      deNome: doador.nome || 'Alguém',
+      tipo: 'doacao',
+      postId: '',
+      texto: (doador.nome || 'Alguém') + ' doou ' + pontos + ' pontos para a plataforma',
+      data: new Date().toLocaleString('pt-BR'),
+      lida: false
+    });
+
+    res.json({
+      ok: true,
+      mensagem: 'Doação realizada com sucesso',
+      usuario: formatUser(doador)
+    });
+  } catch (e) {
+    console.log(e);
+    res.status(500).json({ erro: 'Erro ao processar doação' });
+  }
+});
+
 // health check
 app.get('/', (req, res) => {
   res.json({ ok: true, msg: 'Dossiê Bíblico API online' });
