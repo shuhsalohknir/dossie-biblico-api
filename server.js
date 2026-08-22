@@ -537,6 +537,125 @@ app.post('/api/doar', auth, async (req, res) => {
   }
 });
 
+// =========================
+// ENQUETES
+// =========================
+const enqueteSchema = new mongoose.Schema({
+  pergunta: { type: String, required: true },
+  opcoes: [{
+    texto: String,
+    votos: { type: [String], default: [] }
+  }],
+  ativa: { type: Boolean, default: true },
+  criadoPor: String,
+  criadoPorNome: String,
+  data: { type: String, default: '' }
+}, { timestamps: true });
+const Enquete = mongoose.model('Enquete', enqueteSchema);
+
+// listar enquetes ativas
+app.get('/api/enquetes', auth, async (req, res) => {
+  try {
+    const lista = await Enquete.find({ ativa: true }).sort({ createdAt: -1 }).limit(20);
+    res.json({ ok: true, enquetes: lista });
+  } catch (e) {
+    console.log(e);
+    res.status(500).json({ erro: 'Erro ao listar enquetes' });
+  }
+});
+
+// criar enquete (somente admin)
+app.post('/api/enquetes', auth, async (req, res) => {
+  try {
+    if (!(await isAdmin(req.userId))) {
+      return res.status(403).json({ erro: 'Apenas o administrador pode criar enquetes' });
+    }
+    const user = await User.findById(req.userId);
+    if (!user) return res.status(404).json({ erro: 'Usuário não encontrado' });
+
+    const pergunta = (req.body.pergunta || '').trim();
+    let opcoes = req.body.opcoes || [];
+    if (!pergunta) return res.status(400).json({ erro: 'Pergunta obrigatória' });
+    if (!Array.isArray(opcoes) || opcoes.length < 2) {
+      return res.status(400).json({ erro: 'Mínimo 2 opções' });
+    }
+
+    opcoes = opcoes
+      .map(function (o) {
+        if (typeof o === 'string') return { texto: o.trim(), votos: [] };
+        return { texto: String(o.texto || '').trim(), votos: [] };
+      })
+      .filter(function (o) { return o.texto; });
+
+    if (opcoes.length < 2) {
+      return res.status(400).json({ erro: 'Mínimo 2 opções válidas' });
+    }
+
+    const enquete = await Enquete.create({
+      pergunta,
+      opcoes,
+      ativa: true,
+      criadoPor: String(user._id),
+      criadoPorNome: user.nome,
+      data: new Date().toLocaleString('pt-BR')
+    });
+
+    res.json({ ok: true, enquete });
+  } catch (e) {
+    console.log(e);
+    res.status(500).json({ erro: 'Erro ao criar enquete' });
+  }
+});
+
+// votar (1 voto por usuário)
+app.post('/api/enquetes/:id/votar', auth, async (req, res) => {
+  try {
+    const enquete = await Enquete.findById(req.params.id);
+    if (!enquete || !enquete.ativa) {
+      return res.status(404).json({ erro: 'Enquete não encontrada' });
+    }
+
+    const uid = String(req.userId);
+    const indice = Number(req.body.opcao);
+    if (isNaN(indice) || indice < 0 || indice >= enquete.opcoes.length) {
+      return res.status(400).json({ erro: 'Opção inválida' });
+    }
+
+    const jaVotou = enquete.opcoes.some(function (o) {
+      return (o.votos || []).indexOf(uid) !== -1;
+    });
+    if (jaVotou) {
+      return res.status(400).json({ erro: 'Você já votou nesta enquete' });
+    }
+
+    enquete.opcoes[indice].votos.push(uid);
+    await enquete.save();
+    res.json({ ok: true, enquete });
+  } catch (e) {
+    console.log(e);
+    res.status(500).json({ erro: 'Erro ao votar' });
+  }
+});
+
+// encerrar enquete (admin)
+app.post('/api/enquetes/:id/encerrar', auth, async (req, res) => {
+  try {
+    if (!(await isAdmin(req.userId))) {
+      return res.status(403).json({ erro: 'Apenas o administrador pode encerrar enquetes' });
+    }
+    const enquete = await Enquete.findByIdAndUpdate(
+      req.params.id,
+      { $set: { ativa: false } },
+      { new: true }
+    );
+    if (!enquete) return res.status(404).json({ erro: 'Enquete não encontrada' });
+    res.json({ ok: true, enquete });
+  } catch (e) {
+    console.log(e);
+    res.status(500).json({ erro: 'Erro ao encerrar enquete' });
+  }
+});
+
 // health check
 app.get('/', (req, res) => {
   res.json({ ok: true, msg: 'Dossiê Bíblico API online' });
@@ -546,3 +665,12 @@ const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log('Servidor rodando na porta ' + PORT);
 });
+
+
+
+
+
+
+
+
+
