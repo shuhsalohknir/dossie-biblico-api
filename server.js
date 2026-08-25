@@ -21,6 +21,9 @@ const ADMIN_EMAILS = [
   'pablosyziz@gmail.com'
 ];
 
+// =========================
+// SCHEMAS
+// =========================
 const userSchema = new mongoose.Schema({
   nome: String,
   email: { type: String, unique: true },
@@ -34,9 +37,15 @@ const userSchema = new mongoose.Schema({
   cartas: { type: [Number], default: [] },
   nivelLiberado: { type: Number, default: 1 },
   progressoNivel1: { type: String, default: null },
+  progressoNivel2: { type: String, default: null },
+  nivel2Concluido: { type: Boolean, default: false },
+  caso1Completo: { type: Boolean, default: false },
+  casosCompletos: { type: Number, default: 0 },
   ultimaRoletaGratis: { type: String, default: null },
   ultimaJogadaGratis: { type: String, default: null },
-  jogadaGratisCartas: { type: Boolean, default: false }
+  jogadaGratisCartas: { type: Boolean, default: false },
+  planoAtivo: { type: Object, default: null },
+  planosProgresso: { type: Object, default: {} }
 });
 const User = mongoose.model('User', userSchema);
 
@@ -72,7 +81,7 @@ const notifSchema = new mongoose.Schema({
   paraId: { type: String, index: true },
   deId: String,
   deNome: String,
-  tipo: String, // 'curtida' | 'comentario'
+  tipo: String,
   postId: String,
   texto: String,
   data: { type: String, default: '' },
@@ -81,6 +90,22 @@ const notifSchema = new mongoose.Schema({
 });
 const Notificacao = mongoose.model('Notificacao', notifSchema);
 
+const enqueteSchema = new mongoose.Schema({
+  pergunta: { type: String, required: true },
+  opcoes: [{
+    texto: String,
+    votos: { type: [String], default: [] }
+  }],
+  ativa: { type: Boolean, default: true },
+  criadoPor: String,
+  criadoPorNome: String,
+  data: { type: String, default: '' }
+}, { timestamps: true });
+const Enquete = mongoose.model('Enquete', enqueteSchema);
+
+// =========================
+// HELPERS
+// =========================
 function auth(req, res, next) {
   const header = req.headers.authorization || '';
   const token = header.replace('Bearer ', '');
@@ -98,9 +123,7 @@ async function isAdmin(userId) {
   const user = await User.findById(userId);
   if (!user) return false;
   const email = String(user.email || '').toLowerCase();
-  return ADMIN_EMAILS
-    .map(e => e.toLowerCase())
-    .includes(email);
+  return ADMIN_EMAILS.map(e => e.toLowerCase()).includes(email);
 }
 
 function formatUser(user) {
@@ -108,22 +131,30 @@ function formatUser(user) {
     id: user._id,
     nome: user.nome,
     email: user.email,
-    pontos: user.pontos,
-    foto: user.foto,
-    biografia: user.biografia,
-    perseveranca: user.perseveranca,
-    ultimoCheckin: user.ultimoCheckin,
-    palavrasHebraico: user.palavrasHebraico,
-    cartas: user.cartas,
-    nivelLiberado: user.nivelLiberado,
-    progressoNivel1: user.progressoNivel1,
-    ultimaRoletaGratis: user.ultimaRoletaGratis,
-    ultimaJogadaGratis: user.ultimaJogadaGratis,
-    jogadaGratisCartas: user.jogadaGratisCartas
+    pontos: user.pontos || 0,
+    foto: user.foto || '',
+    biografia: user.biografia || '',
+    perseveranca: user.perseveranca || 0,
+    ultimoCheckin: user.ultimoCheckin || null,
+    palavrasHebraico: user.palavrasHebraico || [],
+    cartas: user.cartas || [],
+    nivelLiberado: user.nivelLiberado || 1,
+    progressoNivel1: user.progressoNivel1 || null,
+    progressoNivel2: user.progressoNivel2 || null,
+    nivel2Concluido: !!user.nivel2Concluido,
+    caso1Completo: !!user.caso1Completo,
+    casosCompletos: user.casosCompletos || 0,
+    ultimaRoletaGratis: user.ultimaRoletaGratis || null,
+    ultimaJogadaGratis: user.ultimaJogadaGratis || null,
+    jogadaGratisCartas: !!user.jogadaGratisCartas,
+    planoAtivo: user.planoAtivo || null,
+    planosProgresso: user.planosProgresso || {}
   };
 }
 
-// CADASTRO
+// =========================
+// AUTH
+// =========================
 app.post('/api/register', async (req, res) => {
   try {
     const { nome, email, senha } = req.body;
@@ -149,7 +180,6 @@ app.post('/api/register', async (req, res) => {
   }
 });
 
-// LOGIN
 app.post('/api/login', async (req, res) => {
   try {
     const { email, senha } = req.body;
@@ -172,7 +202,9 @@ app.post('/api/login', async (req, res) => {
   }
 });
 
-// BUSCAR USUÁRIO LOGADO
+// =========================
+// USUÁRIO
+// =========================
 app.get('/api/usuario', auth, async (req, res) => {
   try {
     const user = await User.findById(req.userId);
@@ -183,25 +215,29 @@ app.get('/api/usuario', auth, async (req, res) => {
   }
 });
 
-// SALVAR USUÁRIO
 app.put('/api/usuario', auth, async (req, res) => {
   try {
     const permitidos = [
       'nome', 'pontos', 'foto', 'biografia',
       'perseveranca', 'ultimoCheckin',
       'palavrasHebraico', 'cartas', 'nivelLiberado',
-      'progressoNivel1', 'ultimaRoletaGratis',
-      'ultimaJogadaGratis', 'jogadaGratisCartas'
+      'progressoNivel1', 'progressoNivel2',
+      'nivel2Concluido', 'caso1Completo', 'casosCompletos',
+      'ultimaRoletaGratis', 'ultimaJogadaGratis', 'jogadaGratisCartas',
+      'planoAtivo', 'planosProgresso'
     ];
+
     const update = {};
     permitidos.forEach(function(campo) {
       if (req.body[campo] !== undefined) update[campo] = req.body[campo];
     });
+
     const user = await User.findByIdAndUpdate(
       req.userId,
       { $set: update },
       { new: true }
     );
+
     if (!user) return res.status(404).json({ erro: 'Usuário não encontrado' });
     res.json({ ok: true, usuario: formatUser(user) });
   } catch (e) {
@@ -210,7 +246,9 @@ app.put('/api/usuario', auth, async (req, res) => {
   }
 });
 
-// FEED - listar
+// =========================
+// FEED
+// =========================
 app.get('/api/posts', auth, async (req, res) => {
   try {
     const posts = await Post.find().sort({ createdAt: -1 }).limit(50);
@@ -220,7 +258,6 @@ app.get('/api/posts', auth, async (req, res) => {
   }
 });
 
-// FEED - criar
 app.post('/api/posts', auth, async (req, res) => {
   try {
     const user = await User.findById(req.userId);
@@ -241,22 +278,17 @@ app.post('/api/posts', auth, async (req, res) => {
   }
 });
 
-// FEED - curtir
 app.post('/api/posts/:id/curtir', auth, async (req, res) => {
   try {
     const post = await Post.findById(req.params.id);
     if (!post) return res.status(404).json({ erro: 'Post não encontrado' });
-
     const uid = String(req.userId);
     const idx = post.curtidas.indexOf(uid);
     const eraNovaCurtida = idx === -1;
-
     if (eraNovaCurtida) post.curtidas.push(uid);
     else post.curtidas.splice(idx, 1);
-
     await post.save();
 
-    // Notifica só em curtida nova e se não for o próprio autor
     if (eraNovaCurtida && String(post.autorId) !== uid) {
       const quem = await User.findById(req.userId);
       await Notificacao.create({
@@ -270,7 +302,6 @@ app.post('/api/posts/:id/curtir', auth, async (req, res) => {
         lida: false
       });
     }
-
     res.json({ ok: true, post });
   } catch (e) {
     console.log(e);
@@ -278,7 +309,6 @@ app.post('/api/posts/:id/curtir', auth, async (req, res) => {
   }
 });
 
-// FEED - comentar
 app.post('/api/posts/:id/comentar', auth, async (req, res) => {
   try {
     const user = await User.findById(req.userId);
@@ -293,7 +323,6 @@ app.post('/api/posts/:id/comentar', auth, async (req, res) => {
     });
     await post.save();
 
-    // Notifica o dono do post (se não for ele mesmo)
     if (String(post.autorId) !== String(user._id)) {
       await Notificacao.create({
         paraId: String(post.autorId),
@@ -306,7 +335,6 @@ app.post('/api/posts/:id/comentar', auth, async (req, res) => {
         lida: false
       });
     }
-
     res.json({ ok: true, post });
   } catch (e) {
     console.log(e);
@@ -314,7 +342,6 @@ app.post('/api/posts/:id/comentar', auth, async (req, res) => {
   }
 });
 
-// FEED - editar (só o autor)
 app.put('/api/posts/:id', auth, async (req, res) => {
   try {
     const post = await Post.findById(req.params.id);
@@ -331,7 +358,6 @@ app.put('/api/posts/:id', auth, async (req, res) => {
   }
 });
 
-// FEED - excluir (só o autor)
 app.delete('/api/posts/:id', auth, async (req, res) => {
   try {
     const post = await Post.findById(req.params.id);
@@ -346,13 +372,16 @@ app.delete('/api/posts/:id', auth, async (req, res) => {
   }
 });
 
+// =========================
 // RANKING
+// =========================
 app.get('/api/ranking', auth, async (req, res) => {
   try {
     const users = await User.find()
       .select('nome foto pontos email')
       .sort({ pontos: -1 })
       .limit(50);
+
     const ranking = users.map(function(u) {
       return {
         id: u._id,
@@ -368,7 +397,9 @@ app.get('/api/ranking', auth, async (req, res) => {
   }
 });
 
-// AVISOS - listar
+// =========================
+// AVISOS
+// =========================
 app.get('/api/avisos', auth, async (req, res) => {
   try {
     const avisos = await Aviso.find().sort({ createdAt: -1 }).limit(50);
@@ -378,7 +409,6 @@ app.get('/api/avisos', auth, async (req, res) => {
   }
 });
 
-// AVISOS - criar (admin)
 app.post('/api/avisos', auth, async (req, res) => {
   try {
     if (!(await isAdmin(req.userId))) {
@@ -386,6 +416,7 @@ app.post('/api/avisos', auth, async (req, res) => {
     }
     const user = await User.findById(req.userId);
     if (!user) return res.status(404).json({ erro: 'Usuário não encontrado' });
+
     const titulo = (req.body.titulo || '').trim();
     const texto = (req.body.texto || '').trim();
     const link = (req.body.link || '').trim();
@@ -393,6 +424,7 @@ app.post('/api/avisos', auth, async (req, res) => {
     if (!titulo || !texto) {
       return res.status(400).json({ erro: 'Título e texto são obrigatórios' });
     }
+
     const aviso = await Aviso.create({
       titulo,
       texto,
@@ -409,7 +441,6 @@ app.post('/api/avisos', auth, async (req, res) => {
   }
 });
 
-// AVISOS - editar (admin)
 app.put('/api/avisos/:id', auth, async (req, res) => {
   try {
     if (!(await isAdmin(req.userId))) {
@@ -438,7 +469,6 @@ app.put('/api/avisos/:id', auth, async (req, res) => {
   }
 });
 
-// AVISOS - excluir (admin)
 app.delete('/api/avisos/:id', auth, async (req, res) => {
   try {
     if (!(await isAdmin(req.userId))) {
@@ -453,7 +483,9 @@ app.delete('/api/avisos/:id', auth, async (req, res) => {
   }
 });
 
-// NOTIFICAÇÕES - listar
+// =========================
+// NOTIFICAÇÕES
+// =========================
 app.get('/api/notificacoes', auth, async (req, res) => {
   try {
     const lista = await Notificacao.find({ paraId: String(req.userId) })
@@ -466,7 +498,6 @@ app.get('/api/notificacoes', auth, async (req, res) => {
   }
 });
 
-// NOTIFICAÇÕES - marcar todas como lidas
 app.post('/api/notificacoes/ler', auth, async (req, res) => {
   try {
     await Notificacao.updateMany(
@@ -480,7 +511,9 @@ app.post('/api/notificacoes/ler', auth, async (req, res) => {
   }
 });
 
-// DOAÇÃO DE PONTOS → vai para o admin da plataforma
+// =========================
+// DOAÇÃO
+// =========================
 app.post('/api/doar', auth, async (req, res) => {
   try {
     const pontos = Math.floor(Number(req.body.pontos || 0));
@@ -490,31 +523,24 @@ app.post('/api/doar', auth, async (req, res) => {
 
     const doador = await User.findById(req.userId);
     if (!doador) return res.status(404).json({ erro: 'Usuário não encontrado' });
-
     if ((doador.pontos || 0) < pontos) {
       return res.status(400).json({ erro: 'Pontos insuficientes' });
     }
 
-    // Conta da plataforma = primeiro admin cadastrado
     const adminEmails = ADMIN_EMAILS.map(e => e.toLowerCase());
     const admin = await User.findOne({ email: { $in: adminEmails } });
     if (!admin) {
       return res.status(500).json({ erro: 'Conta da plataforma não encontrada' });
     }
-
-    // Não deixa doar para si mesmo (se o admin doar)
     if (String(admin._id) === String(doador._id)) {
       return res.status(400).json({ erro: 'A conta da plataforma não pode doar para si mesma' });
     }
 
-    // Transfere
     doador.pontos = (doador.pontos || 0) - pontos;
     admin.pontos = (admin.pontos || 0) + pontos;
-
     await doador.save();
     await admin.save();
 
-    // Notifica o admin
     await Notificacao.create({
       paraId: String(admin._id),
       deId: String(doador._id),
@@ -540,20 +566,6 @@ app.post('/api/doar', auth, async (req, res) => {
 // =========================
 // ENQUETES
 // =========================
-const enqueteSchema = new mongoose.Schema({
-  pergunta: { type: String, required: true },
-  opcoes: [{
-    texto: String,
-    votos: { type: [String], default: [] }
-  }],
-  ativa: { type: Boolean, default: true },
-  criadoPor: String,
-  criadoPorNome: String,
-  data: { type: String, default: '' }
-}, { timestamps: true });
-const Enquete = mongoose.model('Enquete', enqueteSchema);
-
-// listar enquetes ativas
 app.get('/api/enquetes', auth, async (req, res) => {
   try {
     const lista = await Enquete.find({ ativa: true }).sort({ createdAt: -1 }).limit(20);
@@ -564,7 +576,6 @@ app.get('/api/enquetes', auth, async (req, res) => {
   }
 });
 
-// criar enquete (somente admin)
 app.post('/api/enquetes', auth, async (req, res) => {
   try {
     if (!(await isAdmin(req.userId))) {
@@ -581,11 +592,11 @@ app.post('/api/enquetes', auth, async (req, res) => {
     }
 
     opcoes = opcoes
-      .map(function (o) {
+      .map(function(o) {
         if (typeof o === 'string') return { texto: o.trim(), votos: [] };
         return { texto: String(o.texto || '').trim(), votos: [] };
       })
-      .filter(function (o) { return o.texto; });
+      .filter(function(o) { return o.texto; });
 
     if (opcoes.length < 2) {
       return res.status(400).json({ erro: 'Mínimo 2 opções válidas' });
@@ -599,7 +610,6 @@ app.post('/api/enquetes', auth, async (req, res) => {
       criadoPorNome: user.nome,
       data: new Date().toLocaleString('pt-BR')
     });
-
     res.json({ ok: true, enquete });
   } catch (e) {
     console.log(e);
@@ -607,27 +617,23 @@ app.post('/api/enquetes', auth, async (req, res) => {
   }
 });
 
-// votar (1 voto por usuário)
 app.post('/api/enquetes/:id/votar', auth, async (req, res) => {
   try {
     const enquete = await Enquete.findById(req.params.id);
     if (!enquete || !enquete.ativa) {
       return res.status(404).json({ erro: 'Enquete não encontrada' });
     }
-
     const uid = String(req.userId);
     const indice = Number(req.body.opcao);
     if (isNaN(indice) || indice < 0 || indice >= enquete.opcoes.length) {
       return res.status(400).json({ erro: 'Opção inválida' });
     }
-
-    const jaVotou = enquete.opcoes.some(function (o) {
+    const jaVotou = enquete.opcoes.some(function(o) {
       return (o.votos || []).indexOf(uid) !== -1;
     });
     if (jaVotou) {
       return res.status(400).json({ erro: 'Você já votou nesta enquete' });
     }
-
     enquete.opcoes[indice].votos.push(uid);
     await enquete.save();
     res.json({ ok: true, enquete });
@@ -637,7 +643,6 @@ app.post('/api/enquetes/:id/votar', auth, async (req, res) => {
   }
 });
 
-// encerrar enquete (admin)
 app.post('/api/enquetes/:id/encerrar', auth, async (req, res) => {
   try {
     if (!(await isAdmin(req.userId))) {
@@ -656,7 +661,9 @@ app.post('/api/enquetes/:id/encerrar', auth, async (req, res) => {
   }
 });
 
-// health check
+// =========================
+// HEALTH
+// =========================
 app.get('/', (req, res) => {
   res.json({ ok: true, msg: 'Dossiê Bíblico API online' });
 });
@@ -665,12 +672,3 @@ const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log('Servidor rodando na porta ' + PORT);
 });
-
-
-
-
-
-
-
-
-
