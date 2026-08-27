@@ -7,23 +7,17 @@ require('dotenv').config();
 
 const app = express();
 app.use(cors());
-app.use(express.json({ limit: '3mb' }));
+app.use(express.json({ limit: '8mb' }));
 
 mongoose.connect(process.env.MONGO_URL)
   .then(() => console.log('MongoDB conectado'))
   .catch(err => console.log('Erro MongoDB:', err));
 
-// =========================
-// ADMIN
-// =========================
 const ADMIN_EMAILS = [
   'shuhsalohknir@gmail.com',
   'pablosyziz@gmail.com'
 ];
 
-// =========================
-// SCHEMAS
-// =========================
 const userSchema = new mongoose.Schema({
   nome: String,
   email: { type: String, unique: true },
@@ -71,6 +65,7 @@ const avisoSchema = new mongoose.Schema({
   texto: { type: String, default: '' },
   link: { type: String, default: '' },
   video: { type: String, default: '' },
+  imagem: { type: String, default: '' },
   data: { type: String, default: '' },
   autorId: String,
   autorNome: String
@@ -83,6 +78,7 @@ const notifSchema = new mongoose.Schema({
   deNome: String,
   tipo: String,
   postId: String,
+  comentarioId: { type: String, default: '' },
   texto: String,
   data: { type: String, default: '' },
   lida: { type: Boolean, default: false },
@@ -103,9 +99,6 @@ const enqueteSchema = new mongoose.Schema({
 }, { timestamps: true });
 const Enquete = mongoose.model('Enquete', enqueteSchema);
 
-// =========================
-// HELPERS
-// =========================
 function auth(req, res, next) {
   const header = req.headers.authorization || '';
   const token = header.replace('Bearer ', '');
@@ -152,9 +145,6 @@ function formatUser(user) {
   };
 }
 
-// =========================
-// AUTH
-// =========================
 app.post('/api/register', async (req, res) => {
   try {
     const { nome, email, senha } = req.body;
@@ -163,15 +153,9 @@ app.post('/api/register', async (req, res) => {
     }
     const emailNorm = email.toLowerCase().trim();
     const existe = await User.findOne({ email: emailNorm });
-    if (existe) {
-      return res.status(400).json({ erro: 'Este email já está cadastrado' });
-    }
+    if (existe) return res.status(400).json({ erro: 'Este email já está cadastrado' });
     const hash = await bcrypt.hash(senha, 10);
-    const user = await User.create({
-      nome: nome.trim(),
-      email: emailNorm,
-      senha: hash
-    });
+    const user = await User.create({ nome: nome.trim(), email: emailNorm, senha: hash });
     const token = jwt.sign({ id: user._id }, process.env.JWT_SECRET, { expiresIn: '30d' });
     res.json({ ok: true, token, usuario: formatUser(user) });
   } catch (e) {
@@ -183,17 +167,11 @@ app.post('/api/register', async (req, res) => {
 app.post('/api/login', async (req, res) => {
   try {
     const { email, senha } = req.body;
-    if (!email || !senha) {
-      return res.status(400).json({ erro: 'Preencha email e senha' });
-    }
+    if (!email || !senha) return res.status(400).json({ erro: 'Preencha email e senha' });
     const user = await User.findOne({ email: email.toLowerCase().trim() });
-    if (!user) {
-      return res.status(400).json({ erro: 'Email ou senha incorretos' });
-    }
+    if (!user) return res.status(400).json({ erro: 'Email ou senha incorretos' });
     const ok = await bcrypt.compare(senha, user.senha);
-    if (!ok) {
-      return res.status(400).json({ erro: 'Email ou senha incorretos' });
-    }
+    if (!ok) return res.status(400).json({ erro: 'Email ou senha incorretos' });
     const token = jwt.sign({ id: user._id }, process.env.JWT_SECRET, { expiresIn: '30d' });
     res.json({ ok: true, token, usuario: formatUser(user) });
   } catch (e) {
@@ -202,9 +180,6 @@ app.post('/api/login', async (req, res) => {
   }
 });
 
-// =========================
-// USUÁRIO
-// =========================
 app.get('/api/usuario', auth, async (req, res) => {
   try {
     const user = await User.findById(req.userId);
@@ -226,18 +201,11 @@ app.put('/api/usuario', auth, async (req, res) => {
       'ultimaRoletaGratis', 'ultimaJogadaGratis', 'jogadaGratisCartas',
       'planoAtivo', 'planosProgresso'
     ];
-
     const update = {};
     permitidos.forEach(function(campo) {
       if (req.body[campo] !== undefined) update[campo] = req.body[campo];
     });
-
-    const user = await User.findByIdAndUpdate(
-      req.userId,
-      { $set: update },
-      { new: true }
-    );
-
+    const user = await User.findByIdAndUpdate(req.userId, { $set: update }, { new: true });
     if (!user) return res.status(404).json({ erro: 'Usuário não encontrado' });
     res.json({ ok: true, usuario: formatUser(user) });
   } catch (e) {
@@ -246,15 +214,22 @@ app.put('/api/usuario', auth, async (req, res) => {
   }
 });
 
-// =========================
-// FEED
-// =========================
 app.get('/api/posts', auth, async (req, res) => {
   try {
     const posts = await Post.find().sort({ createdAt: -1 }).limit(50);
     res.json({ ok: true, posts });
   } catch (e) {
     res.status(500).json({ erro: 'Erro ao listar posts' });
+  }
+});
+
+app.get('/api/posts/:id', auth, async (req, res) => {
+  try {
+    const post = await Post.findById(req.params.id);
+    if (!post) return res.status(404).json({ erro: 'Post não encontrado' });
+    res.json({ ok: true, post });
+  } catch (e) {
+    res.status(500).json({ erro: 'Erro ao buscar post' });
   }
 });
 
@@ -288,7 +263,6 @@ app.post('/api/posts/:id/curtir', auth, async (req, res) => {
     if (eraNovaCurtida) post.curtidas.push(uid);
     else post.curtidas.splice(idx, 1);
     await post.save();
-
     if (eraNovaCurtida && String(post.autorId) !== uid) {
       const quem = await User.findById(req.userId);
       await Notificacao.create({
@@ -297,6 +271,7 @@ app.post('/api/posts/:id/curtir', auth, async (req, res) => {
         deNome: quem ? quem.nome : 'Alguém',
         tipo: 'curtida',
         postId: String(post._id),
+        comentarioId: '',
         texto: (quem ? quem.nome : 'Alguém') + ' curtiu seu post',
         data: new Date().toLocaleString('pt-BR'),
         lida: false
@@ -314,7 +289,6 @@ app.post('/api/posts/:id/comentar', auth, async (req, res) => {
     const user = await User.findById(req.userId);
     const post = await Post.findById(req.params.id);
     if (!post || !user) return res.status(404).json({ erro: 'Não encontrado' });
-
     post.comentarios.push({
       autorId: String(user._id),
       autorNome: user.nome,
@@ -322,7 +296,7 @@ app.post('/api/posts/:id/comentar', auth, async (req, res) => {
       data: new Date().toLocaleString('pt-BR')
     });
     await post.save();
-
+    const ultimo = post.comentarios[post.comentarios.length - 1];
     if (String(post.autorId) !== String(user._id)) {
       await Notificacao.create({
         paraId: String(post.autorId),
@@ -330,6 +304,7 @@ app.post('/api/posts/:id/comentar', auth, async (req, res) => {
         deNome: user.nome,
         tipo: 'comentario',
         postId: String(post._id),
+        comentarioId: String(ultimo._id || ''),
         texto: user.nome + ' comentou no seu post',
         data: new Date().toLocaleString('pt-BR'),
         lida: false
@@ -372,24 +347,11 @@ app.delete('/api/posts/:id', auth, async (req, res) => {
   }
 });
 
-// =========================
-// RANKING
-// =========================
 app.get('/api/ranking', auth, async (req, res) => {
   try {
-    const users = await User.find()
-      .select('nome foto pontos email')
-      .sort({ pontos: -1 })
-      .limit(50);
-
+    const users = await User.find().select('nome foto pontos email').sort({ pontos: -1 }).limit(50);
     const ranking = users.map(function(u) {
-      return {
-        id: u._id,
-        nome: u.nome,
-        foto: u.foto || '',
-        pontos: u.pontos || 0,
-        email: u.email
-      };
+      return { id: u._id, nome: u.nome, foto: u.foto || '', pontos: u.pontos || 0, email: u.email };
     });
     res.json({ ok: true, ranking });
   } catch (e) {
@@ -397,9 +359,6 @@ app.get('/api/ranking', auth, async (req, res) => {
   }
 });
 
-// =========================
-// AVISOS
-// =========================
 app.get('/api/avisos', auth, async (req, res) => {
   try {
     const avisos = await Aviso.find().sort({ createdAt: -1 }).limit(50);
@@ -416,20 +375,16 @@ app.post('/api/avisos', auth, async (req, res) => {
     }
     const user = await User.findById(req.userId);
     if (!user) return res.status(404).json({ erro: 'Usuário não encontrado' });
-
     const titulo = (req.body.titulo || '').trim();
     const texto = (req.body.texto || '').trim();
     const link = (req.body.link || '').trim();
     const video = (req.body.video || '').trim();
+    const imagem = req.body.imagem || '';
     if (!titulo || !texto) {
       return res.status(400).json({ erro: 'Título e texto são obrigatórios' });
     }
-
     const aviso = await Aviso.create({
-      titulo,
-      texto,
-      link,
-      video,
+      titulo, texto, link, video, imagem,
       data: new Date().toLocaleString('pt-BR'),
       autorId: String(user._id),
       autorNome: user.nome
@@ -446,21 +401,16 @@ app.put('/api/avisos/:id', auth, async (req, res) => {
     if (!(await isAdmin(req.userId))) {
       return res.status(403).json({ erro: 'Apenas o administrador pode editar avisos' });
     }
-    const update = {
-      data: new Date().toLocaleString('pt-BR') + ' (editado)'
-    };
+    const update = { data: new Date().toLocaleString('pt-BR') + ' (editado)' };
     if (req.body.titulo !== undefined) update.titulo = String(req.body.titulo || '').trim();
     if (req.body.texto !== undefined) update.texto = String(req.body.texto || '').trim();
     if (req.body.link !== undefined) update.link = String(req.body.link || '').trim();
     if (req.body.video !== undefined) update.video = String(req.body.video || '').trim();
+    if (req.body.imagem !== undefined) update.imagem = req.body.imagem || '';
     if (!update.titulo || !update.texto) {
       return res.status(400).json({ erro: 'Título e texto são obrigatórios' });
     }
-    const aviso = await Aviso.findByIdAndUpdate(
-      req.params.id,
-      { $set: update },
-      { new: true }
-    );
+    const aviso = await Aviso.findByIdAndUpdate(req.params.id, { $set: update }, { new: true });
     if (!aviso) return res.status(404).json({ erro: 'Aviso não encontrado' });
     res.json({ ok: true, aviso });
   } catch (e) {
@@ -483,9 +433,6 @@ app.delete('/api/avisos/:id', auth, async (req, res) => {
   }
 });
 
-// =========================
-// NOTIFICAÇÕES
-// =========================
 app.get('/api/notificacoes', auth, async (req, res) => {
   try {
     const lista = await Notificacao.find({ paraId: String(req.userId) })
@@ -511,61 +458,45 @@ app.post('/api/notificacoes/ler', auth, async (req, res) => {
   }
 });
 
-// =========================
-// DOAÇÃO
-// =========================
 app.post('/api/doar', auth, async (req, res) => {
   try {
     const pontos = Math.floor(Number(req.body.pontos || 0));
     if (!pontos || pontos < 1) {
       return res.status(400).json({ erro: 'Informe uma quantidade válida de pontos' });
     }
-
     const doador = await User.findById(req.userId);
     if (!doador) return res.status(404).json({ erro: 'Usuário não encontrado' });
     if ((doador.pontos || 0) < pontos) {
       return res.status(400).json({ erro: 'Pontos insuficientes' });
     }
-
     const adminEmails = ADMIN_EMAILS.map(e => e.toLowerCase());
     const admin = await User.findOne({ email: { $in: adminEmails } });
-    if (!admin) {
-      return res.status(500).json({ erro: 'Conta da plataforma não encontrada' });
-    }
+    if (!admin) return res.status(500).json({ erro: 'Conta da plataforma não encontrada' });
     if (String(admin._id) === String(doador._id)) {
       return res.status(400).json({ erro: 'A conta da plataforma não pode doar para si mesma' });
     }
-
     doador.pontos = (doador.pontos || 0) - pontos;
     admin.pontos = (admin.pontos || 0) + pontos;
     await doador.save();
     await admin.save();
-
     await Notificacao.create({
       paraId: String(admin._id),
       deId: String(doador._id),
       deNome: doador.nome || 'Alguém',
       tipo: 'doacao',
       postId: '',
+      comentarioId: '',
       texto: (doador.nome || 'Alguém') + ' doou ' + pontos + ' pontos para a plataforma',
       data: new Date().toLocaleString('pt-BR'),
       lida: false
     });
-
-    res.json({
-      ok: true,
-      mensagem: 'Doação realizada com sucesso',
-      usuario: formatUser(doador)
-    });
+    res.json({ ok: true, mensagem: 'Doação realizada com sucesso', usuario: formatUser(doador) });
   } catch (e) {
     console.log(e);
     res.status(500).json({ erro: 'Erro ao processar doação' });
   }
 });
 
-// =========================
-// ENQUETES
-// =========================
 app.get('/api/enquetes', auth, async (req, res) => {
   try {
     const lista = await Enquete.find({ ativa: true }).sort({ createdAt: -1 }).limit(20);
@@ -583,29 +514,19 @@ app.post('/api/enquetes', auth, async (req, res) => {
     }
     const user = await User.findById(req.userId);
     if (!user) return res.status(404).json({ erro: 'Usuário não encontrado' });
-
     const pergunta = (req.body.pergunta || '').trim();
     let opcoes = req.body.opcoes || [];
     if (!pergunta) return res.status(400).json({ erro: 'Pergunta obrigatória' });
     if (!Array.isArray(opcoes) || opcoes.length < 2) {
       return res.status(400).json({ erro: 'Mínimo 2 opções' });
     }
-
-    opcoes = opcoes
-      .map(function(o) {
-        if (typeof o === 'string') return { texto: o.trim(), votos: [] };
-        return { texto: String(o.texto || '').trim(), votos: [] };
-      })
-      .filter(function(o) { return o.texto; });
-
-    if (opcoes.length < 2) {
-      return res.status(400).json({ erro: 'Mínimo 2 opções válidas' });
-    }
-
+    opcoes = opcoes.map(function(o) {
+      if (typeof o === 'string') return { texto: o.trim(), votos: [] };
+      return { texto: String(o.texto || '').trim(), votos: [] };
+    }).filter(function(o) { return o.texto; });
+    if (opcoes.length < 2) return res.status(400).json({ erro: 'Mínimo 2 opções válidas' });
     const enquete = await Enquete.create({
-      pergunta,
-      opcoes,
-      ativa: true,
+      pergunta, opcoes, ativa: true,
       criadoPor: String(user._id),
       criadoPorNome: user.nome,
       data: new Date().toLocaleString('pt-BR')
@@ -620,9 +541,7 @@ app.post('/api/enquetes', auth, async (req, res) => {
 app.post('/api/enquetes/:id/votar', auth, async (req, res) => {
   try {
     const enquete = await Enquete.findById(req.params.id);
-    if (!enquete || !enquete.ativa) {
-      return res.status(404).json({ erro: 'Enquete não encontrada' });
-    }
+    if (!enquete || !enquete.ativa) return res.status(404).json({ erro: 'Enquete não encontrada' });
     const uid = String(req.userId);
     const indice = Number(req.body.opcao);
     if (isNaN(indice) || indice < 0 || indice >= enquete.opcoes.length) {
@@ -631,9 +550,7 @@ app.post('/api/enquetes/:id/votar', auth, async (req, res) => {
     const jaVotou = enquete.opcoes.some(function(o) {
       return (o.votos || []).indexOf(uid) !== -1;
     });
-    if (jaVotou) {
-      return res.status(400).json({ erro: 'Você já votou nesta enquete' });
-    }
+    if (jaVotou) return res.status(400).json({ erro: 'Você já votou nesta enquete' });
     enquete.opcoes[indice].votos.push(uid);
     await enquete.save();
     res.json({ ok: true, enquete });
@@ -648,11 +565,7 @@ app.post('/api/enquetes/:id/encerrar', auth, async (req, res) => {
     if (!(await isAdmin(req.userId))) {
       return res.status(403).json({ erro: 'Apenas o administrador pode encerrar enquetes' });
     }
-    const enquete = await Enquete.findByIdAndUpdate(
-      req.params.id,
-      { $set: { ativa: false } },
-      { new: true }
-    );
+    const enquete = await Enquete.findByIdAndUpdate(req.params.id, { $set: { ativa: false } }, { new: true });
     if (!enquete) return res.status(404).json({ erro: 'Enquete não encontrada' });
     res.json({ ok: true, enquete });
   } catch (e) {
@@ -661,9 +574,6 @@ app.post('/api/enquetes/:id/encerrar', auth, async (req, res) => {
   }
 });
 
-// =========================
-// HEALTH
-// =========================
 app.get('/', (req, res) => {
   res.json({ ok: true, msg: 'Dossiê Bíblico API online' });
 });
