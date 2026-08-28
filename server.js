@@ -1,23 +1,21 @@
+confira para mim seesta tudo certo 
+
 const express = require('express');
 const cors = require('cors');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const mongoose = require('mongoose');
 require('dotenv').config();
-
 const app = express();
 app.use(cors());
 app.use(express.json({ limit: '8mb' }));
-
 mongoose.connect(process.env.MONGO_URL)
   .then(() => console.log('MongoDB conectado'))
   .catch(err => console.log('Erro MongoDB:', err));
-
 const ADMIN_EMAILS = [
   'shuhsalohknir@gmail.com',
   'pablosyziz@gmail.com'
 ];
-
 const userSchema = new mongoose.Schema({
   nome: String,
   email: { type: String, unique: true },
@@ -42,7 +40,6 @@ const userSchema = new mongoose.Schema({
   planosProgresso: { type: Object, default: {} }
 });
 const User = mongoose.model('User', userSchema);
-
 const postSchema = new mongoose.Schema({
   autorId: String,
   autorNome: String,
@@ -59,7 +56,6 @@ const postSchema = new mongoose.Schema({
   }]
 }, { timestamps: true });
 const Post = mongoose.model('Post', postSchema);
-
 const avisoSchema = new mongoose.Schema({
   titulo: { type: String, default: '' },
   texto: { type: String, default: '' },
@@ -71,7 +67,6 @@ const avisoSchema = new mongoose.Schema({
   autorNome: String
 }, { timestamps: true });
 const Aviso = mongoose.model('Aviso', avisoSchema);
-
 const notifSchema = new mongoose.Schema({
   paraId: { type: String, index: true },
   deId: String,
@@ -85,7 +80,6 @@ const notifSchema = new mongoose.Schema({
   createdAt: { type: Date, default: Date.now }
 });
 const Notificacao = mongoose.model('Notificacao', notifSchema);
-
 const enqueteSchema = new mongoose.Schema({
   pergunta: { type: String, required: true },
   opcoes: [{
@@ -98,7 +92,6 @@ const enqueteSchema = new mongoose.Schema({
   data: { type: String, default: '' }
 }, { timestamps: true });
 const Enquete = mongoose.model('Enquete', enqueteSchema);
-
 function auth(req, res, next) {
   const header = req.headers.authorization || '';
   const token = header.replace('Bearer ', '');
@@ -111,14 +104,12 @@ function auth(req, res, next) {
     return res.status(401).json({ erro: 'Token inválido' });
   }
 }
-
 async function isAdmin(userId) {
   const user = await User.findById(userId);
   if (!user) return false;
   const email = String(user.email || '').toLowerCase();
   return ADMIN_EMAILS.map(e => e.toLowerCase()).includes(email);
 }
-
 function formatUser(user) {
   return {
     id: user._id,
@@ -144,7 +135,6 @@ function formatUser(user) {
     planosProgresso: user.planosProgresso || {}
   };
 }
-
 app.post('/api/register', async (req, res) => {
   try {
     const { nome, email, senha } = req.body;
@@ -163,7 +153,6 @@ app.post('/api/register', async (req, res) => {
     res.status(500).json({ erro: 'Erro no cadastro' });
   }
 });
-
 app.post('/api/login', async (req, res) => {
   try {
     const { email, senha } = req.body;
@@ -179,7 +168,6 @@ app.post('/api/login', async (req, res) => {
     res.status(500).json({ erro: 'Erro no login' });
   }
 });
-
 app.get('/api/usuario', auth, async (req, res) => {
   try {
     const user = await User.findById(req.userId);
@@ -189,7 +177,6 @@ app.get('/api/usuario', auth, async (req, res) => {
     res.status(500).json({ erro: 'Erro ao buscar usuário' });
   }
 });
-
 app.put('/api/usuario', auth, async (req, res) => {
   try {
     const permitidos = [
@@ -213,7 +200,6 @@ app.put('/api/usuario', auth, async (req, res) => {
     res.status(500).json({ erro: 'Erro ao salvar' });
   }
 });
-
 app.get('/api/posts', auth, async (req, res) => {
   try {
     const posts = await Post.find().sort({ createdAt: -1 }).limit(50);
@@ -222,7 +208,6 @@ app.get('/api/posts', auth, async (req, res) => {
     res.status(500).json({ erro: 'Erro ao listar posts' });
   }
 });
-
 app.get('/api/posts/:id', auth, async (req, res) => {
   try {
     const post = await Post.findById(req.params.id);
@@ -232,7 +217,6 @@ app.get('/api/posts/:id', auth, async (req, res) => {
     res.status(500).json({ erro: 'Erro ao buscar post' });
   }
 });
-
 app.post('/api/posts', auth, async (req, res) => {
   try {
     const user = await User.findById(req.userId);
@@ -252,7 +236,6 @@ app.post('/api/posts', auth, async (req, res) => {
     res.status(500).json({ erro: 'Erro ao criar post' });
   }
 });
-
 app.post('/api/posts/:id/curtir', auth, async (req, res) => {
   try {
     const post = await Post.findById(req.params.id);
@@ -283,7 +266,6 @@ app.post('/api/posts/:id/curtir', auth, async (req, res) => {
     res.status(500).json({ erro: 'Erro ao curtir' });
   }
 });
-
 app.post('/api/posts/:id/comentar', auth, async (req, res) => {
   try {
     const user = await User.findById(req.userId);
@@ -316,7 +298,6 @@ app.post('/api/posts/:id/comentar', auth, async (req, res) => {
     res.status(500).json({ erro: 'Erro ao comentar' });
   }
 });
-
 app.put('/api/posts/:id', auth, async (req, res) => {
   try {
     const post = await Post.findById(req.params.id);
@@ -332,7 +313,6 @@ app.put('/api/posts/:id', auth, async (req, res) => {
     res.status(500).json({ erro: 'Erro ao editar post' });
   }
 });
-
 app.delete('/api/posts/:id', auth, async (req, res) => {
   try {
     const post = await Post.findById(req.params.id);
@@ -346,7 +326,6 @@ app.delete('/api/posts/:id', auth, async (req, res) => {
     res.status(500).json({ erro: 'Erro ao excluir post' });
   }
 });
-
 app.get('/api/ranking', auth, async (req, res) => {
   try {
     const users = await User.find().select('nome foto pontos email').sort({ pontos: -1 }).limit(50);
@@ -358,7 +337,6 @@ app.get('/api/ranking', auth, async (req, res) => {
     res.status(500).json({ erro: 'Erro ao carregar ranking' });
   }
 });
-
 app.get('/api/avisos', auth, async (req, res) => {
   try {
     const avisos = await Aviso.find().sort({ createdAt: -1 }).limit(50);
@@ -367,7 +345,6 @@ app.get('/api/avisos', auth, async (req, res) => {
     res.status(500).json({ erro: 'Erro ao carregar avisos' });
   }
 });
-
 app.post('/api/avisos', auth, async (req, res) => {
   try {
     if (!(await isAdmin(req.userId))) {
@@ -395,7 +372,6 @@ app.post('/api/avisos', auth, async (req, res) => {
     res.status(500).json({ erro: 'Erro ao criar aviso' });
   }
 });
-
 app.put('/api/avisos/:id', auth, async (req, res) => {
   try {
     if (!(await isAdmin(req.userId))) {
@@ -418,7 +394,6 @@ app.put('/api/avisos/:id', auth, async (req, res) => {
     res.status(500).json({ erro: 'Erro ao editar aviso' });
   }
 });
-
 app.delete('/api/avisos/:id', auth, async (req, res) => {
   try {
     if (!(await isAdmin(req.userId))) {
@@ -432,7 +407,6 @@ app.delete('/api/avisos/:id', auth, async (req, res) => {
     res.status(500).json({ erro: 'Erro ao excluir aviso' });
   }
 });
-
 app.get('/api/notificacoes', auth, async (req, res) => {
   try {
     const lista = await Notificacao.find({ paraId: String(req.userId) })
@@ -444,7 +418,6 @@ app.get('/api/notificacoes', auth, async (req, res) => {
     res.status(500).json({ erro: 'Erro ao listar notificações' });
   }
 });
-
 app.post('/api/notificacoes/ler', auth, async (req, res) => {
   try {
     await Notificacao.updateMany(
@@ -457,7 +430,6 @@ app.post('/api/notificacoes/ler', auth, async (req, res) => {
     res.status(500).json({ erro: 'Erro ao marcar notificações' });
   }
 });
-
 app.post('/api/doar', auth, async (req, res) => {
   try {
     const pontos = Math.floor(Number(req.body.pontos || 0));
@@ -496,7 +468,6 @@ app.post('/api/doar', auth, async (req, res) => {
     res.status(500).json({ erro: 'Erro ao processar doação' });
   }
 });
-
 app.get('/api/enquetes', auth, async (req, res) => {
   try {
     const lista = await Enquete.find({ ativa: true }).sort({ createdAt: -1 }).limit(20);
@@ -506,7 +477,6 @@ app.get('/api/enquetes', auth, async (req, res) => {
     res.status(500).json({ erro: 'Erro ao listar enquetes' });
   }
 });
-
 app.post('/api/enquetes', auth, async (req, res) => {
   try {
     if (!(await isAdmin(req.userId))) {
@@ -537,7 +507,6 @@ app.post('/api/enquetes', auth, async (req, res) => {
     res.status(500).json({ erro: 'Erro ao criar enquete' });
   }
 });
-
 app.post('/api/enquetes/:id/votar', auth, async (req, res) => {
   try {
     const enquete = await Enquete.findById(req.params.id);
@@ -559,7 +528,6 @@ app.post('/api/enquetes/:id/votar', auth, async (req, res) => {
     res.status(500).json({ erro: 'Erro ao votar' });
   }
 });
-
 app.post('/api/enquetes/:id/encerrar', auth, async (req, res) => {
   try {
     if (!(await isAdmin(req.userId))) {
@@ -573,11 +541,164 @@ app.post('/api/enquetes/:id/encerrar', auth, async (req, res) => {
     res.status(500).json({ erro: 'Erro ao encerrar enquete' });
   }
 });
-
 app.get('/', (req, res) => {
   res.json({ ok: true, msg: 'Dossiê Bíblico API online' });
 });
-
+const { PERGUNTAS_EVENTO } = require('./banco-evento');
+const CUSTO_EVENTO = 100;
+const TEMPO_PROVA_SEGUNDOS = 90;
+const TOTAL_PERGUNTAS = 20;
+function semanaEvento(date) {
+  const d = new Date(date);
+  const y = d.getFullYear();
+  const oneJan = new Date(y, 0, 1);
+  const week = Math.ceil((((d - oneJan) / 86400000) + oneJan.getDay() + 1) / 7);
+  return y + '-W' + week;
+}
+function eventoAbertoAgora() {
+  const br = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/Sao_Paulo' }));
+  const dia = br.getDay();
+  return dia === 6 || dia === 0;
+}
+const eventoSchema = new mongoose.Schema({
+  codigo: { type: String, unique: true },
+  pote: { type: Number, default: 0 },
+  status: { type: String, default: 'aberto' },
+  inscritos: [{
+    userId: String,
+    nome: String,
+    acertos: { type: Number, default: 0 },
+    fezProva: { type: Boolean, default: false },
+    inicioProva: { type: Date, default: null },
+    ordem: { type: [Number], default: [] }
+  }],
+  vencedores: { type: [String], default: [] }
+});
+const Evento = mongoose.models.Evento || mongoose.model('Evento', eventoSchema);
+async function getEventoAtual() {
+  const codigo = semanaEvento(new Date());
+  let ev = await Evento.findOne({ codigo });
+  if (!ev) ev = await Evento.create({ codigo, pote: 0, status: 'aberto', inscritos: [] });
+  return ev;
+}
+app.get('/api/evento', auth, async (req, res) => {
+  try {
+    const ev = await getEventoAtual();
+    const inscrito = ev.inscritos.find(i => String(i.userId) === String(req.userId));
+    res.json({
+      ok: true,
+      codigo: ev.codigo,
+      pote: ev.pote,
+      status: ev.status,
+      aberto: eventoAbertoAgora() && ev.status === 'aberto',
+      totalInscritos: ev.inscritos.length,
+      inscrito: !!inscrito,
+      fezProva: !!(inscrito && inscrito.fezProva),
+      meusAcertos: inscrito ? inscrito.acertos : 0,
+      custo: CUSTO_EVENTO,
+      tempo: TEMPO_PROVA_SEGUNDOS
+    });
+  } catch (e) {
+    res.status(500).json({ erro: 'Erro ao carregar evento' });
+  }
+});
+app.post('/api/evento/inscrever', auth, async (req, res) => {
+  try {
+    if (!eventoAbertoAgora()) return res.status(400).json({ erro: 'O evento só abre sábado e domingo' });
+    const ev = await getEventoAtual();
+    if (ev.status !== 'aberto') return res.status(400).json({ erro: 'Evento encerrado' });
+    if (ev.inscritos.find(i => String(i.userId) === String(req.userId))) {
+      return res.status(400).json({ erro: 'Você já está inscrito neste evento' });
+    }
+    const user = await User.findById(req.userId);
+    if (!user) return res.status(404).json({ erro: 'Usuário não encontrado' });
+    if ((user.pontos || 0) < CUSTO_EVENTO) {
+      return res.status(400).json({ erro: 'Você precisa de ' + CUSTO_EVENTO + ' pontos' });
+    }
+    user.pontos -= CUSTO_EVENTO;
+    await user.save();
+    ev.pote += CUSTO_EVENTO;
+    ev.inscritos.push({
+      userId: String(user._id),
+      nome: user.nome,
+      acertos: 0,
+      fezProva: false
+    });
+    await ev.save();
+    res.json({
+      ok: true,
+      pote: ev.pote,
+      usuario: {
+        id: user._id,
+        nome: user.nome,
+        email: user.email,
+        pontos: user.pontos,
+        foto: user.foto,
+        biografia: user.biografia,
+        perseveranca: user.perseveranca,
+        ultimoCheckin: user.ultimoCheckin,
+        palavrasHebraico: user.palavrasHebraico,
+        cartas: user.cartas,
+        nivelLiberado: user.nivelLiberado
+      }
+    });
+  } catch (e) {
+    res.status(500).json({ erro: 'Erro ao inscrever' });
+  }
+});
+app.post('/api/evento/iniciar', auth, async (req, res) => {
+  try {
+    if (!eventoAbertoAgora()) return res.status(400).json({ erro: 'O evento só abre sábado e domingo' });
+    const ev = await getEventoAtual();
+    const inscrito = ev.inscritos.find(i => String(i.userId) === String(req.userId));
+    if (!inscrito) return res.status(400).json({ erro: 'Inscreva-se primeiro' });
+    if (inscrito.fezProva) return res.status(400).json({ erro: 'Você já fez a prova deste evento' });
+    const ordem = PERGUNTAS_EVENTO.map((_, i) => i).sort(() => Math.random() - 0.5);
+    inscrito.ordem = ordem;
+    inscrito.inicioProva = new Date();
+    await ev.save();
+    const perguntas = ordem.map(function(i) {
+      const p = PERGUNTAS_EVENTO[i];
+      return { id: p.id, pergunta: p.pergunta, opcoes: p.opcoes };
+    });
+    res.json({
+      ok: true,
+      perguntas,
+      tempo: TEMPO_PROVA_SEGUNDOS,
+      terminaEm: new Date(inscrito.inicioProva.getTime() + TEMPO_PROVA_SEGUNDOS * 1000)
+    });
+  } catch (e) {
+    res.status(500).json({ erro: 'Erro ao iniciar prova' });
+  }
+});
+app.post('/api/evento/enviar', auth, async (req, res) => {
+  try {
+    const ev = await getEventoAtual();
+    const inscrito = ev.inscritos.find(i => String(i.userId) === String(req.userId));
+    if (!inscrito) return res.status(400).json({ erro: 'Não inscrito' });
+    if (inscrito.fezProva) return res.status(400).json({ erro: 'Prova já enviada' });
+    if (!inscrito.inicioProva) return res.status(400).json({ erro: 'Prova não iniciada' });
+    const limite = new Date(inscrito.inicioProva.getTime() + (TEMPO_PROVA_SEGUNDOS + 8) * 1000);
+    if (new Date() > limite) {
+      inscrito.fezProva = true;
+      inscrito.acertos = 0;
+      await ev.save();
+      return res.json({ ok: true, acertos: 0, msg: 'Tempo esgotado' });
+    }
+    const respostas = req.body.respostas || [];
+    let acertos = 0;
+    inscrito.ordem.forEach(function(idx, n) {
+      const p = PERGUNTAS_EVENTO[idx];
+      if (Number(respostas[n]) === Number(p.certa)) acertos += 1;
+    });
+    inscrito.acertos = acertos;
+    inscrito.fezProva = true;
+    await ev.save();
+    res.json({ ok: true, acertos, total: TOTAL_PERGUNTAS });
+  } catch (e) {
+    res.status(500).json({ erro: 'Erro ao enviar prova' });
+  }
+});
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log('Servidor rodando na porta ' + PORT);
