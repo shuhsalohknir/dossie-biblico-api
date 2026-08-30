@@ -822,6 +822,165 @@ app.get('/', (req, res) => {
   res.json({ ok: true, msg: 'Dossiê Bíblico API online' });
 });
 
+// COLE NO server.js
+// 1) no userSchema, nada extra obrigatório
+// 2) schemas + rotas abaixo
+// 3) suba o limit do json: app.use(express.json({ limit: '8mb' }));
+
+const memorialSchema = new mongoose.Schema({
+  autorId: String,
+  autorNome: String,
+  autorFoto: { type: String, default: '' },
+  autorTitulo: { type: String, default: 'investigador' },
+  texto: { type: String, default: '' },
+  imagem: { type: String, default: '' },
+  video: { type: String, default: '' },
+  curtidas: { type: [String], default: [] },
+  comentarios: { type: Array, default: [] },
+  criadoEm: { type: Date, default: Date.now },
+  expiraEm: { type: Date }
+});
+memorialSchema.index({ expiraEm: 1 }, { expireAfterSeconds: 0 });
+const Memorial = mongoose.model('Memorial', memorialSchema);
+
+const notifSchema = new mongoose.Schema({
+  userId: String,
+  texto: String,
+  lida: { type: Boolean, default: false },
+  memorialId: String,
+  data: { type: String, default: '' },
+  criadoEm: { type: Date, default: Date.now }
+});
+const Notificacao = mongoose.model('Notificacao', notifSchema);
+
+function memorialAtivoFilter() {
+  return { expiraEm: { $gt: new Date() } };
+}
+
+app.get('/api/memorias', auth, async (req, res) => {
+  try {
+    const lista = await Memorial.find(memorialAtivoFilter()).sort({ criadoEm: -1 }).limit(40);
+    res.json({ ok: true, memorias: lista });
+  } catch (e) {
+    res.status(500).json({ erro: 'Erro ao listar memoriais' });
+  }
+});
+
+app.post('/api/memorias', auth, async (req, res) => {
+  try {
+    const user = await User.findById(req.userId);
+    if (!user) return res.status(404).json({ erro: 'Usuário não encontrado' });
+    if ((user.pontos || 0) < 200) {
+      return res.status(400).json({ erro: 'É preciso 200 pontos para publicar um memorial' });
+    }
+    const texto = (req.body.texto || '').trim();
+    const imagem = req.body.imagem || '';
+    const video = req.body.video || '';
+    if (!texto && !imagem && !video) {
+      return res.status(400).json({ erro: 'Escreva algo ou envie uma imagem/vídeo' });
+    }
+    user.pontos -= 200;
+    await user.save();
+    const agora = new Date();
+    const memorial = await Memorial.create({
+      autorId: String(user._id),
+      autorNome: user.nome,
+      autorFoto: user.foto || '',
+      autorTitulo: user.tituloAtivo || 'investigador',
+      texto,
+      imagem,
+      video,
+      curtidas: [],
+      comentarios: [],
+      criadoEm: agora,
+      expiraEm: new Date(agora.getTime() + 24 * 60 * 60 * 1000)
+    });
+    res.json({
+      ok: true,
+      pontos: user.pontos,
+      memorial
+    });
+  } catch (e) {
+    res.status(500).json({ erro: 'Erro ao criar memorial' });
+  }
+});
+
+app.post('/api/memorias/:id/curtir', auth, async (req, res) => {
+  try {
+    const memorial = await Memorial.findOne({ _id: req.params.id, ...memorialAtivoFilter() });
+    if (!memorial) return res.status(404).json({ erro: 'Memorial expirado ou não encontrado' });
+    const uid = String(req.userId);
+    const idx = memorial.curtidas.indexOf(uid);
+    if (idx === -1) {
+      memorial.curtidas.push(uid);
+      const autor = await User.findById(req.userId);
+      if (String(memorial.autorId) !== uid) {
+        await Notificacao.create({
+          userId: memorial.autorId,
+          texto: (autor ? autor.nome : 'Alguém') + ' curtiu seu memorial',
+          memorialId: String(memorial._id),
+          data: new Date().toLocaleString('pt-BR')
+        });
+      }
+    } else {
+      memorial.curtidas.splice(idx, 1);
+    }
+    await memorial.save();
+    res.json({ ok: true, memorial });
+  } catch (e) {
+    res.status(500).json({ erro: 'Erro ao curtir' });
+  }
+});
+
+app.post('/api/memorias/:id/comentar', auth, async (req, res) => {
+  try {
+    const user = await User.findById(req.userId);
+    const memorial = await Memorial.findOne({ _id: req.params.id, ...memorialAtivoFilter() });
+    if (!memorial || !user) return res.status(404).json({ erro: 'Não encontrado' });
+    const texto = (req.body.texto || '').trim();
+    if (!texto) return res.status(400).json({ erro: 'Comentário vazio' });
+    memorial.comentarios.push({
+      autorId: String(user._id),
+      autorNome: user.nome,
+      texto,
+      data: new Date().toLocaleString('pt-BR')
+    });
+    await memorial.save();
+    if (String(memorial.autorId) !== String(user._id)) {
+      await Notificacao.create({
+        userId: memorial.autorId,
+        texto: user.nome + ' comentou no seu memorial: "' + texto.slice(0, 40) + '"',
+        memorialId: String(memorial._id),
+        data: new Date().toLocaleString('pt-BR')
+      });
+    }
+    res.json({ ok: true, memorial });
+  } catch (e) {
+    res.status(500).json({ erro: 'Erro ao comentar' });
+  }
+});
+
+app.get('/api/notificacoes', auth, async (req, res) => {
+  try {
+    const lista = await Notificacao.find({ userId: String(req.userId) }).sort({ criadoEm: -1 }).limit(40);
+    const naoLidas = lista.filter(function(n) { return !n.lida; }).length;
+    res.json({ ok: true, notificacoes: lista, naoLidas });
+  } catch (e) {
+    res.status(500).json({ erro: 'Erro ao listar notificações' });
+  }
+});
+
+app.post('/api/notificacoes/ler', auth, async (req, res) => {
+  try {
+    await Notificacao.updateMany({ userId: String(req.userId), lida: false }, { $set: { lida: true } });
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(500).json({ erro: 'Erro ao marcar notificações' });
+  }
+});
+
+
+
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log('Servidor rodando na porta ' + PORT);
