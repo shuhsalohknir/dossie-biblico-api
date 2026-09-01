@@ -4,26 +4,21 @@ const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const mongoose = require('mongoose');
 require('dotenv').config();
-
 const { PERGUNTAS_EVENTO } = require('./banco-evento');
-
 const app = express();
 app.use(cors());
 app.use(express.json({ limit: '8mb' }));
-
 mongoose.connect(process.env.MONGO_URL)
   .then(() => console.log('MongoDB conectado'))
   .catch(err => console.log('Erro MongoDB:', err));
-
 const ADMIN_EMAILS = [
   'shuhsalohknir@gmail.com',
   'pablosyziz@gmail.com'
 ];
-
 const CUSTO_EVENTO = 100;
+const CUSTO_MEMORIAL = 200;
 const TEMPO_PROVA_SEGUNDOS = 90;
 const TOTAL_PERGUNTAS = 20;
-
 const userSchema = new mongoose.Schema({
   nome: String,
   email: { type: String, unique: true },
@@ -45,10 +40,11 @@ const userSchema = new mongoose.Schema({
   ultimaJogadaGratis: { type: String, default: null },
   jogadaGratisCartas: { type: Boolean, default: false },
   planoAtivo: { type: Object, default: null },
-  planosProgresso: { type: Object, default: {} }
+  planosProgresso: { type: Object, default: {} },
+  tituloAtivo: { type: String, default: 'investigador' },
+  titulosComprados: { type: [String], default: ['investigador'] }
 });
 const User = mongoose.model('User', userSchema);
-
 const postSchema = new mongoose.Schema({
   autorId: String,
   autorNome: String,
@@ -65,7 +61,6 @@ const postSchema = new mongoose.Schema({
   }]
 }, { timestamps: true });
 const Post = mongoose.model('Post', postSchema);
-
 const avisoSchema = new mongoose.Schema({
   titulo: { type: String, default: '' },
   texto: { type: String, default: '' },
@@ -77,7 +72,6 @@ const avisoSchema = new mongoose.Schema({
   autorNome: String
 }, { timestamps: true });
 const Aviso = mongoose.model('Aviso', avisoSchema);
-
 const notifSchema = new mongoose.Schema({
   paraId: { type: String, index: true },
   deId: String,
@@ -91,7 +85,6 @@ const notifSchema = new mongoose.Schema({
   createdAt: { type: Date, default: Date.now }
 });
 const Notificacao = mongoose.model('Notificacao', notifSchema);
-
 const enqueteSchema = new mongoose.Schema({
   pergunta: { type: String, required: true },
   opcoes: [{
@@ -104,7 +97,6 @@ const enqueteSchema = new mongoose.Schema({
   data: { type: String, default: '' }
 }, { timestamps: true });
 const Enquete = mongoose.model('Enquete', enqueteSchema);
-
 const eventoSchema = new mongoose.Schema({
   codigo: { type: String, unique: true },
   pote: { type: Number, default: 0 },
@@ -120,7 +112,26 @@ const eventoSchema = new mongoose.Schema({
   vencedores: { type: [String], default: [] }
 });
 const Evento = mongoose.models.Evento || mongoose.model('Evento', eventoSchema);
-
+const memorialSchema = new mongoose.Schema({
+  autorId: String,
+  autorNome: String,
+  autorFoto: { type: String, default: '' },
+  autorTitulo: { type: String, default: 'investigador' },
+  texto: { type: String, default: '' },
+  imagem: { type: String, default: '' },
+  video: { type: String, default: '' },
+  curtidas: { type: [String], default: [] },
+  comentarios: [{
+    autorId: String,
+    autorNome: String,
+    texto: String,
+    data: String
+  }],
+  criadoEm: { type: Date, default: Date.now },
+  expiraEm: { type: Date }
+});
+memorialSchema.index({ expiraEm: 1 }, { expireAfterSeconds: 0 });
+const Memorial = mongoose.models.Memorial || mongoose.model('Memorial', memorialSchema);
 function auth(req, res, next) {
   const header = req.headers.authorization || '';
   const token = header.replace('Bearer ', '');
@@ -133,14 +144,12 @@ function auth(req, res, next) {
     return res.status(401).json({ erro: 'Token inválido' });
   }
 }
-
 async function isAdmin(userId) {
   const user = await User.findById(userId);
   if (!user) return false;
   const email = String(user.email || '').toLowerCase();
   return ADMIN_EMAILS.map(e => e.toLowerCase()).includes(email);
 }
-
 function formatUser(user) {
   return {
     id: user._id,
@@ -163,10 +172,11 @@ function formatUser(user) {
     ultimaJogadaGratis: user.ultimaJogadaGratis || null,
     jogadaGratisCartas: !!user.jogadaGratisCartas,
     planoAtivo: user.planoAtivo || null,
-    planosProgresso: user.planosProgresso || {}
+    planosProgresso: user.planosProgresso || {},
+    tituloAtivo: user.tituloAtivo || 'investigador',
+    titulosComprados: user.titulosComprados || ['investigador']
   };
 }
-
 function semanaEvento(date) {
   const d = new Date(date);
   const y = d.getFullYear();
@@ -174,25 +184,21 @@ function semanaEvento(date) {
   const week = Math.ceil((((d - oneJan) / 86400000) + oneJan.getDay() + 1) / 7);
   return y + '-W' + week;
 }
-
 function eventoAbertoAgora() {
   const br = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/Sao_Paulo' }));
   const dia = br.getDay();
   return dia === 6 || dia === 0;
 }
-
 async function getEventoAtual() {
   const codigo = semanaEvento(new Date());
   let ev = await Evento.findOne({ codigo });
   if (!ev) ev = await Evento.create({ codigo, pote: 0, status: 'aberto', inscritos: [] });
   return ev;
 }
-
 async function pagarEEncerrar(ev) {
   if (!ev || ev.status === 'encerrado') return ev;
   ev.status = 'encerrado';
   const jogaram = (ev.inscritos || []).filter(function(i) { return i.fezProva; });
-
   if (!jogaram.length) {
     for (let n = 0; n < (ev.inscritos || []).length; n++) {
       const i = ev.inscritos[n];
@@ -207,7 +213,6 @@ async function pagarEEncerrar(ev) {
     await ev.save();
     return ev;
   }
-
   let max = 0;
   jogaram.forEach(function(i) {
     if ((i.acertos || 0) > max) max = i.acertos || 0;
@@ -219,7 +224,6 @@ async function pagarEEncerrar(ev) {
   const premio = Math.floor(pote / vencedores.length);
   const resto = pote - (premio * vencedores.length);
   ev.vencedores = [];
-
   for (let n = 0; n < vencedores.length; n++) {
     const i = vencedores[n];
     const u = await User.findById(i.userId);
@@ -243,12 +247,10 @@ async function pagarEEncerrar(ev) {
       });
     } catch (e) {}
   }
-
   ev.pote = 0;
   await ev.save();
   return ev;
 }
-
 async function encerrarEventosVencidos() {
   if (eventoAbertoAgora()) return;
   const abertos = await Evento.find({ status: 'aberto' });
@@ -256,7 +258,9 @@ async function encerrarEventosVencidos() {
     await pagarEEncerrar(abertos[n]);
   }
 }
-
+function memorialAtivoFilter() {
+  return { expiraEm: { $gt: new Date() } };
+}
 app.post('/api/register', async (req, res) => {
   try {
     const { nome, email, senha } = req.body;
@@ -275,7 +279,6 @@ app.post('/api/register', async (req, res) => {
     res.status(500).json({ erro: 'Erro no cadastro' });
   }
 });
-
 app.post('/api/login', async (req, res) => {
   try {
     const { email, senha } = req.body;
@@ -291,7 +294,6 @@ app.post('/api/login', async (req, res) => {
     res.status(500).json({ erro: 'Erro no login' });
   }
 });
-
 app.get('/api/usuario', auth, async (req, res) => {
   try {
     const user = await User.findById(req.userId);
@@ -301,7 +303,6 @@ app.get('/api/usuario', auth, async (req, res) => {
     res.status(500).json({ erro: 'Erro ao buscar usuário' });
   }
 });
-
 app.put('/api/usuario', auth, async (req, res) => {
   try {
     const permitidos = [
@@ -311,7 +312,8 @@ app.put('/api/usuario', auth, async (req, res) => {
       'progressoNivel1', 'progressoNivel2',
       'nivel2Concluido', 'caso1Completo', 'casosCompletos',
       'ultimaRoletaGratis', 'ultimaJogadaGratis', 'jogadaGratisCartas',
-      'planoAtivo', 'planosProgresso'
+      'planoAtivo', 'planosProgresso',
+      'tituloAtivo', 'titulosComprados'
     ];
     const update = {};
     permitidos.forEach(function(campo) {
@@ -325,7 +327,6 @@ app.put('/api/usuario', auth, async (req, res) => {
     res.status(500).json({ erro: 'Erro ao salvar' });
   }
 });
-
 app.get('/api/posts', auth, async (req, res) => {
   try {
     const posts = await Post.find().sort({ createdAt: -1 }).limit(50);
@@ -334,7 +335,6 @@ app.get('/api/posts', auth, async (req, res) => {
     res.status(500).json({ erro: 'Erro ao listar posts' });
   }
 });
-
 app.get('/api/posts/:id', auth, async (req, res) => {
   try {
     const post = await Post.findById(req.params.id);
@@ -344,7 +344,6 @@ app.get('/api/posts/:id', auth, async (req, res) => {
     res.status(500).json({ erro: 'Erro ao buscar post' });
   }
 });
-
 app.post('/api/posts', auth, async (req, res) => {
   try {
     const user = await User.findById(req.userId);
@@ -364,7 +363,6 @@ app.post('/api/posts', auth, async (req, res) => {
     res.status(500).json({ erro: 'Erro ao criar post' });
   }
 });
-
 app.post('/api/posts/:id/curtir', auth, async (req, res) => {
   try {
     const post = await Post.findById(req.params.id);
@@ -395,7 +393,6 @@ app.post('/api/posts/:id/curtir', auth, async (req, res) => {
     res.status(500).json({ erro: 'Erro ao curtir' });
   }
 });
-
 app.post('/api/posts/:id/comentar', auth, async (req, res) => {
   try {
     const user = await User.findById(req.userId);
@@ -428,7 +425,6 @@ app.post('/api/posts/:id/comentar', auth, async (req, res) => {
     res.status(500).json({ erro: 'Erro ao comentar' });
   }
 });
-
 app.put('/api/posts/:id', auth, async (req, res) => {
   try {
     const post = await Post.findById(req.params.id);
@@ -444,7 +440,6 @@ app.put('/api/posts/:id', auth, async (req, res) => {
     res.status(500).json({ erro: 'Erro ao editar post' });
   }
 });
-
 app.delete('/api/posts/:id', auth, async (req, res) => {
   try {
     const post = await Post.findById(req.params.id);
@@ -458,20 +453,133 @@ app.delete('/api/posts/:id', auth, async (req, res) => {
     res.status(500).json({ erro: 'Erro ao excluir post' });
   }
 });
-
+app.get('/api/memorias', auth, async (req, res) => {
+  try {
+    const lista = await Memorial.find(memorialAtivoFilter()).sort({ criadoEm: -1 }).limit(40);
+    res.json({ ok: true, memorias: lista });
+  } catch (e) {
+    res.status(500).json({ erro: 'Erro ao listar memoriais' });
+  }
+});
+app.post('/api/memorias', auth, async (req, res) => {
+  try {
+    const user = await User.findById(req.userId);
+    if (!user) return res.status(404).json({ erro: 'Usuário não encontrado' });
+    if ((user.pontos || 0) < CUSTO_MEMORIAL) {
+      return res.status(400).json({ erro: 'É preciso 200 pontos para publicar um memorial' });
+    }
+    const texto = (req.body.texto || '').trim();
+    const imagem = req.body.imagem || '';
+    const video = req.body.video || '';
+    if (!texto && !imagem && !video) {
+      return res.status(400).json({ erro: 'Escreva algo ou envie uma imagem/vídeo' });
+    }
+    user.pontos -= CUSTO_MEMORIAL;
+    await user.save();
+    const agora = new Date();
+    const memorial = await Memorial.create({
+      autorId: String(user._id),
+      autorNome: user.nome,
+      autorFoto: user.foto || '',
+      autorTitulo: user.tituloAtivo || 'investigador',
+      texto,
+      imagem,
+      video,
+      curtidas: [],
+      comentarios: [],
+      criadoEm: agora,
+      expiraEm: new Date(agora.getTime() + 24 * 60 * 60 * 1000)
+    });
+    res.json({ ok: true, pontos: user.pontos, memorial, usuario: formatUser(user) });
+  } catch (e) {
+    console.log(e);
+    res.status(500).json({ erro: 'Erro ao criar memorial' });
+  }
+});
+app.post('/api/memorias/:id/curtir', auth, async (req, res) => {
+  try {
+    const memorial = await Memorial.findOne({ _id: req.params.id, ...memorialAtivoFilter() });
+    if (!memorial) return res.status(404).json({ erro: 'Memorial expirado ou não encontrado' });
+    const uid = String(req.userId);
+    const idx = memorial.curtidas.indexOf(uid);
+    if (idx === -1) {
+      memorial.curtidas.push(uid);
+      if (String(memorial.autorId) !== uid) {
+        const quem = await User.findById(req.userId);
+        await Notificacao.create({
+          paraId: String(memorial.autorId),
+          deId: uid,
+          deNome: quem ? quem.nome : 'Alguém',
+          tipo: 'memorial',
+          postId: String(memorial._id),
+          comentarioId: '',
+          texto: (quem ? quem.nome : 'Alguém') + ' curtiu seu memorial',
+          data: new Date().toLocaleString('pt-BR'),
+          lida: false
+        });
+      }
+    } else {
+      memorial.curtidas.splice(idx, 1);
+    }
+    await memorial.save();
+    res.json({ ok: true, memorial });
+  } catch (e) {
+    console.log(e);
+    res.status(500).json({ erro: 'Erro ao curtir' });
+  }
+});
+app.post('/api/memorias/:id/comentar', auth, async (req, res) => {
+  try {
+    const user = await User.findById(req.userId);
+    const memorial = await Memorial.findOne({ _id: req.params.id, ...memorialAtivoFilter() });
+    if (!memorial || !user) return res.status(404).json({ erro: 'Não encontrado' });
+    const texto = (req.body.texto || '').trim();
+    if (!texto) return res.status(400).json({ erro: 'Comentário vazio' });
+    memorial.comentarios.push({
+      autorId: String(user._id),
+      autorNome: user.nome,
+      texto,
+      data: new Date().toLocaleString('pt-BR')
+    });
+    await memorial.save();
+    if (String(memorial.autorId) !== String(user._id)) {
+      await Notificacao.create({
+        paraId: String(memorial.autorId),
+        deId: String(user._id),
+        deNome: user.nome,
+        tipo: 'memorial',
+        postId: String(memorial._id),
+        comentarioId: '',
+        texto: user.nome + ' comentou no seu memorial',
+        data: new Date().toLocaleString('pt-BR'),
+        lida: false
+      });
+    }
+    res.json({ ok: true, memorial });
+  } catch (e) {
+    console.log(e);
+    res.status(500).json({ erro: 'Erro ao comentar' });
+  }
+});
 app.get('/api/ranking', auth, async (req, res) => {
   try {
     await encerrarEventosVencidos();
-    const users = await User.find().select('nome foto pontos email').sort({ pontos: -1 }).limit(50);
+    const users = await User.find().select('nome foto pontos email tituloAtivo').sort({ pontos: -1 }).limit(50);
     const ranking = users.map(function(u) {
-      return { id: u._id, nome: u.nome, foto: u.foto || '', pontos: u.pontos || 0, email: u.email };
+      return {
+        id: u._id,
+        nome: u.nome,
+        foto: u.foto || '',
+        pontos: u.pontos || 0,
+        email: u.email,
+        tituloAtivo: u.tituloAtivo || 'investigador'
+      };
     });
     res.json({ ok: true, ranking });
   } catch (e) {
     res.status(500).json({ erro: 'Erro ao carregar ranking' });
   }
 });
-
 app.get('/api/avisos', auth, async (req, res) => {
   try {
     const avisos = await Aviso.find().sort({ createdAt: -1 }).limit(50);
@@ -480,7 +588,6 @@ app.get('/api/avisos', auth, async (req, res) => {
     res.status(500).json({ erro: 'Erro ao carregar avisos' });
   }
 });
-
 app.post('/api/avisos', auth, async (req, res) => {
   try {
     if (!(await isAdmin(req.userId))) {
@@ -508,7 +615,6 @@ app.post('/api/avisos', auth, async (req, res) => {
     res.status(500).json({ erro: 'Erro ao criar aviso' });
   }
 });
-
 app.put('/api/avisos/:id', auth, async (req, res) => {
   try {
     if (!(await isAdmin(req.userId))) {
@@ -531,7 +637,6 @@ app.put('/api/avisos/:id', auth, async (req, res) => {
     res.status(500).json({ erro: 'Erro ao editar aviso' });
   }
 });
-
 app.delete('/api/avisos/:id', auth, async (req, res) => {
   try {
     if (!(await isAdmin(req.userId))) {
@@ -545,19 +650,18 @@ app.delete('/api/avisos/:id', auth, async (req, res) => {
     res.status(500).json({ erro: 'Erro ao excluir aviso' });
   }
 });
-
 app.get('/api/notificacoes', auth, async (req, res) => {
   try {
     const lista = await Notificacao.find({ paraId: String(req.userId) })
       .sort({ createdAt: -1 })
       .limit(50);
-    res.json({ ok: true, notificacoes: lista });
+    const naoLidas = lista.filter(function(n) { return !n.lida; }).length;
+    res.json({ ok: true, notificacoes: lista, naoLidas });
   } catch (e) {
     console.log(e);
     res.status(500).json({ erro: 'Erro ao listar notificações' });
   }
 });
-
 app.post('/api/notificacoes/ler', auth, async (req, res) => {
   try {
     await Notificacao.updateMany(
@@ -570,7 +674,6 @@ app.post('/api/notificacoes/ler', auth, async (req, res) => {
     res.status(500).json({ erro: 'Erro ao marcar notificações' });
   }
 });
-
 app.post('/api/doar', auth, async (req, res) => {
   try {
     const pontos = Math.floor(Number(req.body.pontos || 0));
@@ -609,7 +712,6 @@ app.post('/api/doar', auth, async (req, res) => {
     res.status(500).json({ erro: 'Erro ao processar doação' });
   }
 });
-
 app.get('/api/enquetes', auth, async (req, res) => {
   try {
     const lista = await Enquete.find({ ativa: true }).sort({ createdAt: -1 }).limit(20);
@@ -619,7 +721,6 @@ app.get('/api/enquetes', auth, async (req, res) => {
     res.status(500).json({ erro: 'Erro ao listar enquetes' });
   }
 });
-
 app.post('/api/enquetes', auth, async (req, res) => {
   try {
     if (!(await isAdmin(req.userId))) {
@@ -650,7 +751,6 @@ app.post('/api/enquetes', auth, async (req, res) => {
     res.status(500).json({ erro: 'Erro ao criar enquete' });
   }
 });
-
 app.post('/api/enquetes/:id/votar', auth, async (req, res) => {
   try {
     const enquete = await Enquete.findById(req.params.id);
@@ -672,7 +772,6 @@ app.post('/api/enquetes/:id/votar', auth, async (req, res) => {
     res.status(500).json({ erro: 'Erro ao votar' });
   }
 });
-
 app.post('/api/enquetes/:id/encerrar', auth, async (req, res) => {
   try {
     if (!(await isAdmin(req.userId))) {
@@ -686,7 +785,6 @@ app.post('/api/enquetes/:id/encerrar', auth, async (req, res) => {
     res.status(500).json({ erro: 'Erro ao encerrar enquete' });
   }
 });
-
 app.get('/api/evento', auth, async (req, res) => {
   try {
     await encerrarEventosVencidos();
@@ -716,7 +814,6 @@ app.get('/api/evento', auth, async (req, res) => {
     res.status(500).json({ erro: 'Erro ao carregar evento' });
   }
 });
-
 app.post('/api/evento/inscrever', auth, async (req, res) => {
   try {
     if (!eventoAbertoAgora()) return res.status(400).json({ erro: 'O evento só abre sábado e domingo' });
@@ -746,7 +843,6 @@ app.post('/api/evento/inscrever', auth, async (req, res) => {
     res.status(500).json({ erro: 'Erro ao inscrever' });
   }
 });
-
 app.post('/api/evento/iniciar', auth, async (req, res) => {
   try {
     if (!eventoAbertoAgora()) return res.status(400).json({ erro: 'O evento só abre sábado e domingo' });
@@ -773,7 +869,6 @@ app.post('/api/evento/iniciar', auth, async (req, res) => {
     res.status(500).json({ erro: 'Erro ao iniciar prova' });
   }
 });
-
 app.post('/api/evento/enviar', auth, async (req, res) => {
   try {
     const ev = await getEventoAtual();
@@ -803,7 +898,6 @@ app.post('/api/evento/enviar', auth, async (req, res) => {
     res.status(500).json({ erro: 'Erro ao enviar prova' });
   }
 });
-
 app.post('/api/evento/encerrar', auth, async (req, res) => {
   try {
     if (!(await isAdmin(req.userId))) {
@@ -817,170 +911,9 @@ app.post('/api/evento/encerrar', auth, async (req, res) => {
     res.status(500).json({ erro: 'Erro ao encerrar evento' });
   }
 });
-
 app.get('/', (req, res) => {
   res.json({ ok: true, msg: 'Dossiê Bíblico API online' });
 });
-
-// COLE NO server.js
-// 1) no userSchema, nada extra obrigatório
-// 2) schemas + rotas abaixo
-// 3) suba o limit do json: app.use(express.json({ limit: '8mb' }));
-
-const memorialSchema = new mongoose.Schema({
-  autorId: String,
-  autorNome: String,
-  autorFoto: { type: String, default: '' },
-  autorTitulo: { type: String, default: 'investigador' },
-  texto: { type: String, default: '' },
-  imagem: { type: String, default: '' },
-  video: { type: String, default: '' },
-  curtidas: { type: [String], default: [] },
-  comentarios: { type: Array, default: [] },
-  criadoEm: { type: Date, default: Date.now },
-  expiraEm: { type: Date }
-});
-memorialSchema.index({ expiraEm: 1 }, { expireAfterSeconds: 0 });
-const Memorial = mongoose.model('Memorial', memorialSchema);
-
-const notifSchema = new mongoose.Schema({
-  userId: String,
-  texto: String,
-  lida: { type: Boolean, default: false },
-  memorialId: String,
-  data: { type: String, default: '' },
-  criadoEm: { type: Date, default: Date.now }
-});
-const Notificacao = mongoose.model('Notificacao', notifSchema);
-
-function memorialAtivoFilter() {
-  return { expiraEm: { $gt: new Date() } };
-}
-
-app.get('/api/memorias', auth, async (req, res) => {
-  try {
-    const lista = await Memorial.find(memorialAtivoFilter()).sort({ criadoEm: -1 }).limit(40);
-    res.json({ ok: true, memorias: lista });
-  } catch (e) {
-    res.status(500).json({ erro: 'Erro ao listar memoriais' });
-  }
-});
-
-app.post('/api/memorias', auth, async (req, res) => {
-  try {
-    const user = await User.findById(req.userId);
-    if (!user) return res.status(404).json({ erro: 'Usuário não encontrado' });
-    if ((user.pontos || 0) < 200) {
-      return res.status(400).json({ erro: 'É preciso 200 pontos para publicar um memorial' });
-    }
-    const texto = (req.body.texto || '').trim();
-    const imagem = req.body.imagem || '';
-    const video = req.body.video || '';
-    if (!texto && !imagem && !video) {
-      return res.status(400).json({ erro: 'Escreva algo ou envie uma imagem/vídeo' });
-    }
-    user.pontos -= 200;
-    await user.save();
-    const agora = new Date();
-    const memorial = await Memorial.create({
-      autorId: String(user._id),
-      autorNome: user.nome,
-      autorFoto: user.foto || '',
-      autorTitulo: user.tituloAtivo || 'investigador',
-      texto,
-      imagem,
-      video,
-      curtidas: [],
-      comentarios: [],
-      criadoEm: agora,
-      expiraEm: new Date(agora.getTime() + 24 * 60 * 60 * 1000)
-    });
-    res.json({
-      ok: true,
-      pontos: user.pontos,
-      memorial
-    });
-  } catch (e) {
-    res.status(500).json({ erro: 'Erro ao criar memorial' });
-  }
-});
-
-app.post('/api/memorias/:id/curtir', auth, async (req, res) => {
-  try {
-    const memorial = await Memorial.findOne({ _id: req.params.id, ...memorialAtivoFilter() });
-    if (!memorial) return res.status(404).json({ erro: 'Memorial expirado ou não encontrado' });
-    const uid = String(req.userId);
-    const idx = memorial.curtidas.indexOf(uid);
-    if (idx === -1) {
-      memorial.curtidas.push(uid);
-      const autor = await User.findById(req.userId);
-      if (String(memorial.autorId) !== uid) {
-        await Notificacao.create({
-          userId: memorial.autorId,
-          texto: (autor ? autor.nome : 'Alguém') + ' curtiu seu memorial',
-          memorialId: String(memorial._id),
-          data: new Date().toLocaleString('pt-BR')
-        });
-      }
-    } else {
-      memorial.curtidas.splice(idx, 1);
-    }
-    await memorial.save();
-    res.json({ ok: true, memorial });
-  } catch (e) {
-    res.status(500).json({ erro: 'Erro ao curtir' });
-  }
-});
-
-app.post('/api/memorias/:id/comentar', auth, async (req, res) => {
-  try {
-    const user = await User.findById(req.userId);
-    const memorial = await Memorial.findOne({ _id: req.params.id, ...memorialAtivoFilter() });
-    if (!memorial || !user) return res.status(404).json({ erro: 'Não encontrado' });
-    const texto = (req.body.texto || '').trim();
-    if (!texto) return res.status(400).json({ erro: 'Comentário vazio' });
-    memorial.comentarios.push({
-      autorId: String(user._id),
-      autorNome: user.nome,
-      texto,
-      data: new Date().toLocaleString('pt-BR')
-    });
-    await memorial.save();
-    if (String(memorial.autorId) !== String(user._id)) {
-      await Notificacao.create({
-        userId: memorial.autorId,
-        texto: user.nome + ' comentou no seu memorial: "' + texto.slice(0, 40) + '"',
-        memorialId: String(memorial._id),
-        data: new Date().toLocaleString('pt-BR')
-      });
-    }
-    res.json({ ok: true, memorial });
-  } catch (e) {
-    res.status(500).json({ erro: 'Erro ao comentar' });
-  }
-});
-
-app.get('/api/notificacoes', auth, async (req, res) => {
-  try {
-    const lista = await Notificacao.find({ userId: String(req.userId) }).sort({ criadoEm: -1 }).limit(40);
-    const naoLidas = lista.filter(function(n) { return !n.lida; }).length;
-    res.json({ ok: true, notificacoes: lista, naoLidas });
-  } catch (e) {
-    res.status(500).json({ erro: 'Erro ao listar notificações' });
-  }
-});
-
-app.post('/api/notificacoes/ler', auth, async (req, res) => {
-  try {
-    await Notificacao.updateMany({ userId: String(req.userId), lida: false }, { $set: { lida: true } });
-    res.json({ ok: true });
-  } catch (e) {
-    res.status(500).json({ erro: 'Erro ao marcar notificações' });
-  }
-});
-
-
-
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log('Servidor rodando na porta ' + PORT);
