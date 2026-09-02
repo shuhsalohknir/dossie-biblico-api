@@ -461,6 +461,16 @@ app.get('/api/memorias', auth, async (req, res) => {
     res.status(500).json({ erro: 'Erro ao listar memoriais' });
   }
 });
+app.get('/api/memorias/:id', auth, async (req, res) => {
+  try {
+    const memorial = await Memorial.findById(req.params.id);
+    if (!memorial) return res.status(404).json({ erro: 'Memorial não encontrado' });
+    const ativo = memorial.expiraEm && new Date(memorial.expiraEm).getTime() > Date.now();
+    res.json({ ok: true, memorial, expirado: !ativo });
+  } catch (e) {
+    res.status(500).json({ erro: 'Erro ao buscar memorial' });
+  }
+});
 app.post('/api/memorias', auth, async (req, res) => {
   try {
     const user = await User.findById(req.userId);
@@ -791,9 +801,21 @@ app.get('/api/evento', auth, async (req, res) => {
     const ev = await getEventoAtual();
     const inscrito = ev.inscritos.find(i => String(i.userId) === String(req.userId));
     const nomes = [];
+    const vencedoresInfo = [];
+    const totalPote = (ev.inscritos || []).length * CUSTO_EVENTO;
+    const qtdV = (ev.vencedores || []).length;
+    const premioBase = qtdV ? Math.floor(totalPote / qtdV) : 0;
+    const resto = qtdV ? totalPote - premioBase * qtdV : 0;
     for (let n = 0; n < (ev.vencedores || []).length; n++) {
       const u = await User.findById(ev.vencedores[n]);
-      if (u) nomes.push(u.nome);
+      if (!u) continue;
+      nomes.push(u.nome);
+      vencedoresInfo.push({
+        id: String(u._id),
+        nome: u.nome,
+        foto: u.foto || '',
+        premio: premioBase + (n === 0 ? resto : 0)
+      });
     }
     res.json({
       ok: true,
@@ -806,6 +828,8 @@ app.get('/api/evento', auth, async (req, res) => {
       fezProva: !!(inscrito && inscrito.fezProva),
       meusAcertos: inscrito ? inscrito.acertos : 0,
       vencedoresNomes: nomes,
+      vencedores: vencedoresInfo,
+      potePago: ev.status === 'encerrado' ? totalPote : 0,
       custo: CUSTO_EVENTO,
       tempo: TEMPO_PROVA_SEGUNDOS
     });
