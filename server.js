@@ -177,22 +177,49 @@ function formatUser(user) {
     titulosComprados: user.titulosComprados || ['investigador']
   };
 }
-function semanaEvento(date) {
-  const d = new Date(date);
-  const y = d.getFullYear();
-  const oneJan = new Date(y, 0, 1);
-  const week = Math.ceil((((d - oneJan) / 86400000) + oneJan.getDay() + 1) / 7);
-  return y + '-W' + week;
+function partesBrasil() {
+  const p = {};
+  new Intl.DateTimeFormat('en-US', {
+    timeZone: 'America/Sao_Paulo',
+    weekday: 'short',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit'
+  }).formatToParts(new Date()).forEach(function(x) {
+    p[x.type] = x.value;
+  });
+  return p;
+}
+function diaBrasil() {
+  const map = { Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6 };
+  return map[partesBrasil().weekday];
 }
 function eventoAbertoAgora() {
-  const br = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/Sao_Paulo' }));
-  const dia = br.getDay();
+  const dia = diaBrasil();
   return dia === 6 || dia === 0;
 }
+function semanaEvento() {
+  const p = partesBrasil();
+  const dia = diaBrasil();
+  const y = Number(p.year);
+  const m = Number(p.month);
+  const d = Number(p.day);
+  let delta = 0;
+  if (dia === 0) delta = -1;
+  else if (dia === 6) delta = 0;
+  else delta = -(dia + 1);
+  const sab = new Date(Date.UTC(y, m - 1, d + delta));
+  const yy = sab.getUTCFullYear();
+  const mm = String(sab.getUTCMonth() + 1).padStart(2, '0');
+  const dd = String(sab.getUTCDate()).padStart(2, '0');
+  return yy + '-SAB-' + mm + '-' + dd;
+}
 async function getEventoAtual() {
-  const codigo = semanaEvento(new Date());
-  let ev = await Evento.findOne({ codigo });
-  if (!ev) ev = await Evento.create({ codigo, pote: 0, status: 'aberto', inscritos: [] });
+  let ev = await Evento.findOne({ status: 'aberto' }).sort({ _id: -1 });
+  if (ev) return ev;
+  const codigo = semanaEvento();
+  ev = await Evento.findOne({ codigo }).sort({ _id: -1 });
+  if (!ev) ev = await Evento.create({ codigo, pote: 0, status: 'aguardando', inscritos: [] });
   return ev;
 }
 async function pagarEEncerrar(ev) {
@@ -258,6 +285,15 @@ async function encerrarEventosVencidos() {
     await pagarEEncerrar(abertos[n]);
   }
 }
+async function garantirEventoDoFimDeSemana() {
+  try {
+    await encerrarEventosVencidos();
+  } catch (e) {
+    console.log('Falha ao encerrar evento:', e.message || e);
+  }
+}
+setInterval(garantirEventoDoFimDeSemana, 10 * 60 * 1000);
+setTimeout(garantirEventoDoFimDeSemana, 4000);
 function memorialAtivoFilter() {
   return { expiraEm: { $gt: new Date() } };
 }
@@ -822,7 +858,8 @@ app.get('/api/evento', auth, async (req, res) => {
       codigo: ev.codigo,
       pote: ev.pote,
       status: ev.status,
-      aberto: eventoAbertoAgora() && ev.status === 'aberto',
+      aberto: ev.status === 'aberto',
+      admin: await isAdmin(req.userId),
       totalInscritos: ev.inscritos.length,
       inscrito: !!inscrito,
       fezProva: !!(inscrito && inscrito.fezProva),
@@ -840,9 +877,8 @@ app.get('/api/evento', auth, async (req, res) => {
 });
 app.post('/api/evento/inscrever', auth, async (req, res) => {
   try {
-    if (!eventoAbertoAgora()) return res.status(400).json({ erro: 'O evento só abre sábado e domingo' });
     const ev = await getEventoAtual();
-    if (ev.status !== 'aberto') return res.status(400).json({ erro: 'Evento encerrado' });
+    if (ev.status !== 'aberto') return res.status(400).json({ erro: 'O evento ainda não foi iniciado pelo administrador' });
     if (ev.inscritos.find(i => String(i.userId) === String(req.userId))) {
       return res.status(400).json({ erro: 'Você já está inscrito neste evento' });
     }
@@ -869,8 +905,8 @@ app.post('/api/evento/inscrever', auth, async (req, res) => {
 });
 app.post('/api/evento/iniciar', auth, async (req, res) => {
   try {
-    if (!eventoAbertoAgora()) return res.status(400).json({ erro: 'O evento só abre sábado e domingo' });
     const ev = await getEventoAtual();
+    if (ev.status !== 'aberto') return res.status(400).json({ erro: 'O evento ainda não foi iniciado pelo administrador' });
     const inscrito = ev.inscritos.find(i => String(i.userId) === String(req.userId));
     if (!inscrito) return res.status(400).json({ erro: 'Inscreva-se primeiro' });
     if (inscrito.fezProva) return res.status(400).json({ erro: 'Você já fez a prova deste evento' });
@@ -922,6 +958,26 @@ app.post('/api/evento/enviar', auth, async (req, res) => {
     res.status(500).json({ erro: 'Erro ao enviar prova' });
   }
 });
+app.post('/api/evento/abrir', auth, async (req, res) => {
+  try {
+    if (!(await isAdmin(req.userId))) {
+      return res.status(403).json({ erro: 'Apenas o administrador pode iniciar o evento' });
+    }
+    let ev = await Evento.findOne({ status: 'aberto' }).sort({ _id: -1 });
+    if (ev) return res.json({ ok: true, status: ev.status, codigo: ev.codigo, msg: 'Evento já está aberto' });
+    const codigo = semanaEvento();
+    ev = await Evento.findOne({ codigo, status: 'aguardando' }).sort({ _id: -1 });
+    if (!ev) ev = await Evento.create({ codigo, pote: 0, status: 'aberto', inscritos: [] });
+    else {
+      ev.status = 'aberto';
+      await ev.save();
+    }
+    res.json({ ok: true, status: ev.status, codigo: ev.codigo });
+  } catch (e) {
+    console.log(e);
+    res.status(500).json({ erro: 'Erro ao iniciar evento' });
+  }
+});
 app.post('/api/evento/encerrar', auth, async (req, res) => {
   try {
     if (!(await isAdmin(req.userId))) {
@@ -933,6 +989,21 @@ app.post('/api/evento/encerrar', auth, async (req, res) => {
   } catch (e) {
     console.log(e);
     res.status(500).json({ erro: 'Erro ao encerrar evento' });
+  }
+});
+app.get('/api/evento/tick', async (req, res) => {
+  try {
+    await garantirEventoDoFimDeSemana();
+    const ev = await getEventoAtual();
+    res.json({
+      ok: true,
+      aberto: eventoAbertoAgora() && ev.status === 'aberto',
+      codigo: ev.codigo,
+      status: ev.status,
+      diaBrasil: diaBrasil()
+    });
+  } catch (e) {
+    res.status(500).json({ erro: 'Falha no tick do evento' });
   }
 });
 app.get('/', (req, res) => {
