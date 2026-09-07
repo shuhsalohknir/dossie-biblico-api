@@ -244,8 +244,13 @@ async function pagarEEncerrar(ev) {
   jogaram.forEach(function(i) {
     if ((i.acertos || 0) > max) max = i.acertos || 0;
   });
+  const vistos = {};
   const vencedores = jogaram.filter(function(i) {
-    return (i.acertos || 0) === max;
+    if ((i.acertos || 0) !== max) return false;
+    const id = String(i.userId);
+    if (vistos[id]) return false;
+    vistos[id] = true;
+    return true;
   });
   const pote = ev.pote || 0;
   const premio = Math.floor(pote / vencedores.length);
@@ -655,6 +660,23 @@ app.post('/api/avisos', auth, async (req, res) => {
       autorId: String(user._id),
       autorNome: user.nome
     });
+    try {
+      const users = await User.find({}, '_id');
+      const lote = users.map(function(u) {
+        return {
+          paraId: String(u._id),
+          deId: String(user._id),
+          deNome: user.nome || 'Dossiê',
+          tipo: 'aviso',
+          texto: titulo,
+          data: new Date().toLocaleString('pt-BR'),
+          lida: false
+        };
+      });
+      if (lote.length) await Notificacao.insertMany(lote);
+    } catch (errNotif) {
+      console.log('Falha ao notificar avisos:', errNotif.message || errNotif);
+    }
     res.json({ ok: true, aviso });
   } catch (e) {
     console.log(e);
@@ -842,8 +864,14 @@ app.get('/api/evento', auth, async (req, res) => {
     const qtdV = (ev.vencedores || []).length;
     const premioBase = qtdV ? Math.floor(totalPote / qtdV) : 0;
     const resto = qtdV ? totalPote - premioBase * qtdV : 0;
+    const idsUnicos = [];
     for (let n = 0; n < (ev.vencedores || []).length; n++) {
-      const u = await User.findById(ev.vencedores[n]);
+      const id = String(ev.vencedores[n]);
+      if (idsUnicos.indexOf(id) !== -1) continue;
+      idsUnicos.push(id);
+    }
+    for (let n = 0; n < idsUnicos.length; n++) {
+      const u = await User.findById(idsUnicos[n]);
       if (!u) continue;
       nomes.push(u.nome);
       vencedoresInfo.push({
