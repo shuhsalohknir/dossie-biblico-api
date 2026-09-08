@@ -3,6 +3,7 @@ const cors = require('cors');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const mongoose = require('mongoose');
+const crypto = require('crypto');
 require('dotenv').config();
 const { PERGUNTAS_EVENTO } = require('./banco-evento');
 const app = express();
@@ -42,9 +43,87 @@ const userSchema = new mongoose.Schema({
   planoAtivo: { type: Object, default: null },
   planosProgresso: { type: Object, default: {} },
   tituloAtivo: { type: String, default: 'investigador' },
-  titulosComprados: { type: [String], default: ['investigador'] }
+  titulosComprados: { type: [String], default: ['investigador'] },
+  fcmToken: { type: String, default: '' }
 });
 const User = mongoose.model('User', userSchema);
+
+function base64url(obj) {
+  const txt = typeof obj === 'string' ? obj : JSON.stringify(obj);
+  return Buffer.from(txt).toString('base64').replace(/=/g, '').replace(/\+/g, '-').replace(/\//g, '_');
+}
+async function getFcmAccessToken(sa) {
+  const now = Math.floor(Date.now() / 1000);
+  const unsigned = base64url({ alg: 'RS256', typ: 'JWT' }) + '.' + base64url({
+    iss: sa.client_email,
+    scope: 'https://www.googleapis.com/auth/firebase.messaging',
+    aud: 'https://oauth2.googleapis.com/token',
+    iat: now,
+    exp: now + 3500
+  });
+  const signer = crypto.createSign('RSA-SHA256');
+  signer.update(unsigned);
+  const sig = signer.sign(sa.private_key, 'base64').replace(/=/g, '').replace(/\+/g, '-').replace(/\//g, '_');
+  const res = await fetch('https://oauth2.googleapis.com/token', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: 'grant_type=' + encodeURIComponent('urn:ietf:params:oauth:grant-type:jwt-bearer') + '&assertion=' + unsigned + '.' + sig
+  });
+  const data = await res.json();
+  return data.access_token;
+}
+async function enviarPushTodos(titulo, corpo) {
+  const raw = process.env.FIREBASE_SERVICE_ACCOUNT;
+  if (!raw) {
+    console.log('FIREBASE_SERVICE_ACCOUNT ausente — push não enviado');
+    return;
+  }
+  let sa;
+  try { sa = JSON.parse(raw); } catch (e) {
+    console.log('FIREBASE_SERVICE_ACCOUNT inválido');
+    return;
+  }
+  let access;
+  try { access = await getFcmAccessToken(sa); } catch (e) {
+    console.log('Erro token FCM', e.message || e);
+    return;
+  }
+  if (!access) return;
+  const users = await User.find({ fcmToken: { $exists: true, $ne: '' } }, 'fcmToken');
+  const tokens = [];
+  const seen = {};
+  users.forEach(function(u) {
+    if (!u.fcmToken || seen[u.fcmToken]) return;
+    seen[u.fcmToken] = true;
+    tokens.push(u.fcmToken);
+  });
+  const url = 'https://fcm.googleapis.com/v1/projects/' + sa.project_id + '/messages:send';
+  for (let i = 0; i < tokens.length; i++) {
+    try {
+      const res = await fetch(url, {
+        method: 'POST',
+        headers: {
+          'Authorization': 'Bearer ' + access,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          message: {
+            token: tokens[i],
+            notification: {
+              title: titulo || 'Dossiê Bíblico',
+              body: (corpo || '').slice(0, 140)
+            },
+            data: { rota: 'avisos.html' },
+            android: { priority: 'HIGH' }
+          }
+        })
+      });
+      console.log('FCM', res.status, (await res.text()).slice(0, 120));
+    } catch (e) {
+      console.log('Erro FCM', e.message || e);
+    }
+  }
+}
 const postSchema = new mongoose.Schema({
   autorId: String,
   autorNome: String,
@@ -639,6 +718,18 @@ app.get('/api/avisos', auth, async (req, res) => {
     res.status(500).json({ erro: 'Erro ao carregar avisos' });
   }
 });
+
+app.post('/api/push-token', auth, async (req, res) => {
+  try {
+    const token = (req.body.token || '').trim();
+    if (!token) return res.status(400).json({ erro: 'Token vazio' });
+    await User.findByIdAndUpdate(req.userId, { $set: { fcmToken: token } });
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(500).json({ erro: 'Erro ao salvar token' });
+  }
+});
+
 app.post('/api/avisos', auth, async (req, res) => {
   try {
     if (!(await isAdmin(req.userId))) {
@@ -674,6 +765,7 @@ app.post('/api/avisos', auth, async (req, res) => {
         };
       });
       if (lote.length) await Notificacao.insertMany(lote);
+enviarPushTodos(titulo, texto).catch(function(){});
     } catch (errNotif) {
       console.log('Falha ao notificar avisos:', errNotif.message || errNotif);
     }
