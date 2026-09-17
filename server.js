@@ -54,20 +54,23 @@ function base64url(obj) {
 }
 async function getFcmAccessToken(sa) {
   const now = Math.floor(Date.now() / 1000);
-  const unsigned = base64url({ alg: 'RS256', typ: 'JWT' }) + '.' + base64url({
+  const header = { alg: 'RS256', typ: 'JWT' };
+  const claim = {
     iss: sa.client_email,
     scope: 'https://www.googleapis.com/auth/firebase.messaging',
     aud: 'https://oauth2.googleapis.com/token',
     iat: now,
     exp: now + 3500
-  });
+  };
+  const unsigned = base64url(header) + '.' + base64url(claim);
   const signer = crypto.createSign('RSA-SHA256');
   signer.update(unsigned);
   const sig = signer.sign(sa.private_key, 'base64').replace(/=/g, '').replace(/\+/g, '-').replace(/\//g, '_');
+  const jwtAssinado = unsigned + '.' + sig;
   const res = await fetch('https://oauth2.googleapis.com/token', {
     method: 'POST',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-    body: 'grant_type=' + encodeURIComponent('urn:ietf:params:oauth:grant-type:jwt-bearer') + '&assertion=' + unsigned + '.' + sig
+    body: 'grant_type=' + encodeURIComponent('urn:ietf:params:oauth:grant-type:jwt-bearer') + '&assertion=' + jwtAssinado
   });
   const data = await res.json();
   return data.access_token;
@@ -80,7 +83,7 @@ async function enviarPushTodos(titulo, corpo) {
   }
   let sa;
   try { sa = JSON.parse(raw); } catch (e) {
-    console.log('FIREBASE_SERVICE_ACCOUNT inválido');
+    console.log('FIREBASE_SERVICE_ACCOUNT não é um JSON válido');
     return;
   }
   let access;
@@ -88,7 +91,10 @@ async function enviarPushTodos(titulo, corpo) {
     console.log('Erro token FCM', e.message || e);
     return;
   }
-  if (!access) return;
+  if (!access) {
+    console.log('Sem access_token FCM');
+    return;
+  }
   const users = await User.find({ fcmToken: { $exists: true, $ne: '' } }, 'fcmToken');
   const tokens = [];
   const seen = {};
@@ -118,12 +124,14 @@ async function enviarPushTodos(titulo, corpo) {
           }
         })
       });
-      console.log('FCM', res.status, (await res.text()).slice(0, 120));
+      const txt = await res.text();
+      console.log('FCM', res.status, txt.slice(0, 160));
     } catch (e) {
       console.log('Erro FCM', e.message || e);
     }
   }
 }
+
 const postSchema = new mongoose.Schema({
   autorId: String,
   autorNome: String,
@@ -729,7 +737,6 @@ app.post('/api/push-token', auth, async (req, res) => {
     res.status(500).json({ erro: 'Erro ao salvar token' });
   }
 });
-
 app.post('/api/avisos', auth, async (req, res) => {
   try {
     if (!(await isAdmin(req.userId))) {
@@ -765,7 +772,6 @@ app.post('/api/avisos', auth, async (req, res) => {
         };
       });
       if (lote.length) await Notificacao.insertMany(lote);
-enviarPushTodos(titulo, texto).catch(function(){});
     } catch (errNotif) {
       console.log('Falha ao notificar avisos:', errNotif.message || errNotif);
     }
