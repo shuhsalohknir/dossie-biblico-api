@@ -44,10 +44,11 @@ const userSchema = new mongoose.Schema({
   planosProgresso: { type: Object, default: {} },
   tituloAtivo: { type: String, default: 'investigador' },
   titulosComprados: { type: [String], default: ['investigador'] },
-  fcmToken: { type: String, default: '' }
+   fcmToken: { type: String, default: '' },
+  codigoRecuperacao: { type: String, default: '' },
+  codigoExpira: { type: Date, default: null }
 });
 const User = mongoose.model('User', userSchema);
-
 function base64url(obj) {
   const txt = typeof obj === 'string' ? obj : JSON.stringify(obj);
   return Buffer.from(txt).toString('base64').replace(/=/g, '').replace(/\+/g, '-').replace(/\//g, '_');
@@ -75,63 +76,42 @@ async function getFcmAccessToken(sa) {
   const data = await res.json();
   return data.access_token;
 }
-async function enviarPushTodos(titulo, corpo) {
+async function enviarPushPara(userId, titulo, corpo, rota) {
   const raw = process.env.FIREBASE_SERVICE_ACCOUNT;
-  if (!raw) {
-    console.log('FIREBASE_SERVICE_ACCOUNT ausente — push não enviado');
-    return;
-  }
+  if (!raw) return;
   let sa;
-  try { sa = JSON.parse(raw); } catch (e) {
-    console.log('FIREBASE_SERVICE_ACCOUNT não é um JSON válido');
-    return;
-  }
+  try { sa = JSON.parse(raw); } catch (e) { return; }
+  const user = await User.findById(userId);
+  if (!user || !user.fcmToken) return;
   let access;
-  try { access = await getFcmAccessToken(sa); } catch (e) {
-    console.log('Erro token FCM', e.message || e);
-    return;
-  }
-  if (!access) {
-    console.log('Sem access_token FCM');
-    return;
-  }
-  const users = await User.find({ fcmToken: { $exists: true, $ne: '' } }, 'fcmToken');
-  const tokens = [];
-  const seen = {};
-  users.forEach(function(u) {
-    if (!u.fcmToken || seen[u.fcmToken]) return;
-    seen[u.fcmToken] = true;
-    tokens.push(u.fcmToken);
-  });
+  try { access = await getFcmAccessToken(sa); } catch (e) { return; }
+  if (!access) return;
   const url = 'https://fcm.googleapis.com/v1/projects/' + sa.project_id + '/messages:send';
-  for (let i = 0; i < tokens.length; i++) {
-    try {
-      const res = await fetch(url, {
-        method: 'POST',
-        headers: {
-          'Authorization': 'Bearer ' + access,
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({
-          message: {
-            token: tokens[i],
-            notification: {
-              title: titulo || 'Dossiê Bíblico',
-              body: (corpo || '').slice(0, 140)
-            },
-            data: { rota: 'avisos.html' },
-            android: { priority: 'HIGH' }
-          }
-        })
-      });
-      const txt = await res.text();
-      console.log('FCM', res.status, txt.slice(0, 160));
-    } catch (e) {
-      console.log('Erro FCM', e.message || e);
-    }
+  try {
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Authorization': 'Bearer ' + access,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        message: {
+          token: user.fcmToken,
+          notification: {
+            title: titulo || 'Dossiê Bíblico',
+            body: (corpo || '').slice(0, 140)
+          },
+          data: { rota: rota || 'notificacoes.html' },
+          android: { priority: 'HIGH' }
+        }
+      })
+    });
+    const txt = await res.text();
+    console.log('FCM user', res.status, txt.slice(0, 160));
+  } catch (e) {
+    console.log('Erro FCM user', e.message || e);
   }
 }
-
 const postSchema = new mongoose.Schema({
   autorId: String,
   autorNome: String,
@@ -364,6 +344,7 @@ async function pagarEEncerrar(ev) {
         data: new Date().toLocaleString('pt-BR'),
         lida: false
       });
+      enviarPushPara(String(u._id), 'Evento', 'Você venceu o evento e recebeu ' + ganho + ' pontos', 'evento.html');
     } catch (e) {}
   }
   ev.pote = 0;
@@ -503,6 +484,7 @@ app.post('/api/posts/:id/curtir', auth, async (req, res) => {
     await post.save();
     if (eraNovaCurtida && String(post.autorId) !== uid) {
       const quem = await User.findById(req.userId);
+      const texto = (quem ? quem.nome : 'Alguém') + ' curtiu seu post';
       await Notificacao.create({
         paraId: String(post.autorId),
         deId: uid,
@@ -510,10 +492,11 @@ app.post('/api/posts/:id/curtir', auth, async (req, res) => {
         tipo: 'curtida',
         postId: String(post._id),
         comentarioId: '',
-        texto: (quem ? quem.nome : 'Alguém') + ' curtiu seu post',
+        texto,
         data: new Date().toLocaleString('pt-BR'),
         lida: false
       });
+      enviarPushPara(String(post.autorId), 'Nova curtida', texto, 'post.html?id=' + post._id);
     }
     res.json({ ok: true, post });
   } catch (e) {
@@ -535,6 +518,7 @@ app.post('/api/posts/:id/comentar', auth, async (req, res) => {
     await post.save();
     const ultimo = post.comentarios[post.comentarios.length - 1];
     if (String(post.autorId) !== String(user._id)) {
+      const texto = user.nome + ' comentou no seu post';
       await Notificacao.create({
         paraId: String(post.autorId),
         deId: String(user._id),
@@ -542,10 +526,11 @@ app.post('/api/posts/:id/comentar', auth, async (req, res) => {
         tipo: 'comentario',
         postId: String(post._id),
         comentarioId: String(ultimo._id || ''),
-        texto: user.nome + ' comentou no seu post',
+        texto,
         data: new Date().toLocaleString('pt-BR'),
         lida: false
       });
+      enviarPushPara(String(post.autorId), 'Novo comentário', texto, 'post.html?id=' + post._id);
     }
     res.json({ ok: true, post });
   } catch (e) {
@@ -644,6 +629,7 @@ app.post('/api/memorias/:id/curtir', auth, async (req, res) => {
       memorial.curtidas.push(uid);
       if (String(memorial.autorId) !== uid) {
         const quem = await User.findById(req.userId);
+        const texto = (quem ? quem.nome : 'Alguém') + ' curtiu seu memorial';
         await Notificacao.create({
           paraId: String(memorial.autorId),
           deId: uid,
@@ -651,10 +637,11 @@ app.post('/api/memorias/:id/curtir', auth, async (req, res) => {
           tipo: 'memorial',
           postId: String(memorial._id),
           comentarioId: '',
-          texto: (quem ? quem.nome : 'Alguém') + ' curtiu seu memorial',
+          texto,
           data: new Date().toLocaleString('pt-BR'),
           lida: false
         });
+        enviarPushPara(String(memorial.autorId), 'Memorial', texto, 'memorial.html?id=' + memorial._id);
       }
     } else {
       memorial.curtidas.splice(idx, 1);
@@ -681,6 +668,7 @@ app.post('/api/memorias/:id/comentar', auth, async (req, res) => {
     });
     await memorial.save();
     if (String(memorial.autorId) !== String(user._id)) {
+      const msg = user.nome + ' comentou no seu memorial';
       await Notificacao.create({
         paraId: String(memorial.autorId),
         deId: String(user._id),
@@ -688,10 +676,11 @@ app.post('/api/memorias/:id/comentar', auth, async (req, res) => {
         tipo: 'memorial',
         postId: String(memorial._id),
         comentarioId: '',
-        texto: user.nome + ' comentou no seu memorial',
+        texto: msg,
         data: new Date().toLocaleString('pt-BR'),
         lida: false
       });
+      enviarPushPara(String(memorial.autorId), 'Memorial', msg, 'memorial.html?id=' + memorial._id);
     }
     res.json({ ok: true, memorial });
   } catch (e) {
@@ -726,7 +715,6 @@ app.get('/api/avisos', auth, async (req, res) => {
     res.status(500).json({ erro: 'Erro ao carregar avisos' });
   }
 });
-
 app.post('/api/push-token', auth, async (req, res) => {
   try {
     const token = (req.body.token || '').trim();
@@ -772,6 +760,10 @@ app.post('/api/avisos', auth, async (req, res) => {
         };
       });
       if (lote.length) await Notificacao.insertMany(lote);
+      const comToken = await User.find({ fcmToken: { $exists: true, $ne: '' } }, '_id');
+      for (let i = 0; i < comToken.length; i++) {
+        enviarPushPara(String(comToken[i]._id), titulo, texto, 'avisos.html');
+      }
     } catch (errNotif) {
       console.log('Falha ao notificar avisos:', errNotif.message || errNotif);
     }
@@ -861,6 +853,7 @@ app.post('/api/doar', auth, async (req, res) => {
     admin.pontos = (admin.pontos || 0) + pontos;
     await doador.save();
     await admin.save();
+    const texto = (doador.nome || 'Alguém') + ' doou ' + pontos + ' pontos para a plataforma';
     await Notificacao.create({
       paraId: String(admin._id),
       deId: String(doador._id),
@@ -868,10 +861,11 @@ app.post('/api/doar', auth, async (req, res) => {
       tipo: 'doacao',
       postId: '',
       comentarioId: '',
-      texto: (doador.nome || 'Alguém') + ' doou ' + pontos + ' pontos para a plataforma',
+      texto,
       data: new Date().toLocaleString('pt-BR'),
       lida: false
     });
+    enviarPushPara(String(admin._id), 'Doação', texto, 'notificacoes.html');
     res.json({ ok: true, mensagem: 'Doação realizada com sucesso', usuario: formatUser(doador) });
   } catch (e) {
     console.log(e);
@@ -1132,6 +1126,78 @@ app.get('/api/evento/tick', async (req, res) => {
     res.status(500).json({ erro: 'Falha no tick do evento' });
   }
 });
+app.put('/api/usuario/senha', auth, async (req, res) => {
+  try {
+    const senhaAtual = String(req.body.senhaAtual || '');
+    const senhaNova = String(req.body.senhaNova || '');
+    if (!senhaAtual || !senhaNova) {
+      return res.status(400).json({ erro: 'Preencha a senha atual e a nova' });
+    }
+    if (senhaNova.length < 6) {
+      return res.status(400).json({ erro: 'A nova senha precisa ter pelo menos 6 caracteres' });
+    }
+    const user = await User.findById(req.userId);
+    if (!user) return res.status(404).json({ erro: 'Usuário não encontrado' });
+    const ok = await bcrypt.compare(senhaAtual, user.senha);
+    if (!ok) return res.status(400).json({ erro: 'Senha atual incorreta' });
+    user.senha = await bcrypt.hash(senhaNova, 10);
+    user.codigoRecuperacao = '';
+    user.codigoExpira = null;
+    await user.save();
+    res.json({ ok: true });
+  } catch (e) {
+    console.log(e);
+    res.status(500).json({ erro: 'Erro ao alterar senha' });
+  }
+});
+
+app.post('/api/recuperar-senha', async (req, res) => {
+  try {
+    const email = String(req.body.email || '').toLowerCase().trim();
+    if (!email) return res.status(400).json({ erro: 'Informe o email' });
+    const user = await User.findOne({ email });
+    if (!user) return res.status(400).json({ erro: 'Email não encontrado' });
+    const codigo = String(Math.floor(100000 + Math.random() * 900000));
+    user.codigoRecuperacao = codigo;
+    user.codigoExpira = new Date(Date.now() + 30 * 60 * 1000);
+    await user.save();
+    console.log('CODIGO RECUPERACAO', email, codigo);
+    res.json({ ok: true, msg: 'Código gerado. Fale com o administrador para receber.' });
+  } catch (e) {
+    console.log(e);
+    res.status(500).json({ erro: 'Erro ao solicitar recuperação' });
+  }
+});
+
+app.post('/api/redefinir-senha', async (req, res) => {
+  try {
+    const email = String(req.body.email || '').toLowerCase().trim();
+    const codigo = String(req.body.codigo || '').trim();
+    const senhaNova = String(req.body.senhaNova || '');
+    if (!email || !codigo || !senhaNova) {
+      return res.status(400).json({ erro: 'Preencha email, código e nova senha' });
+    }
+    if (senhaNova.length < 6) {
+      return res.status(400).json({ erro: 'A nova senha precisa ter pelo menos 6 caracteres' });
+    }
+    const user = await User.findOne({ email });
+    if (!user || !user.codigoRecuperacao || user.codigoRecuperacao !== codigo) {
+      return res.status(400).json({ erro: 'Código inválido' });
+    }
+    if (!user.codigoExpira || new Date(user.codigoExpira) < new Date()) {
+      return res.status(400).json({ erro: 'Código expirado. Solicite outro.' });
+    }
+    user.senha = await bcrypt.hash(senhaNova, 10);
+    user.codigoRecuperacao = '';
+    user.codigoExpira = null;
+    await user.save();
+    res.json({ ok: true });
+  } catch (e) {
+    console.log(e);
+    res.status(500).json({ erro: 'Erro ao redefinir senha' });
+  }
+});
+
 app.get('/', (req, res) => {
   res.json({ ok: true, msg: 'Dossiê Bíblico API online' });
 });
