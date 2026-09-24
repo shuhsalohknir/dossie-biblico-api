@@ -8,7 +8,7 @@ require('dotenv').config();
 const { PERGUNTAS_EVENTO } = require('./banco-evento');
 const app = express();
 app.use(cors());
-app.use(express.json({ limit: '8mb' }));
+app.use(express.json({ limit: '20mb' }));
 mongoose.connect(process.env.MONGO_URL)
   .then(() => console.log('MongoDB conectado'))
   .catch(err => console.log('Erro MongoDB:', err));
