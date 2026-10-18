@@ -199,6 +199,25 @@ const memorialSchema = new mongoose.Schema({
 });
 memorialSchema.index({ expiraEm: 1 }, { expireAfterSeconds: 0 });
 const Memorial = mongoose.models.Memorial || mongoose.model('Memorial', memorialSchema);
+const instituicaoSchema = new mongoose.Schema({
+  id: String,
+  nome: String,
+  tipo: String,
+  site: String,
+  pix: String,
+  ordem: { type: Number, default: 0 }
+});
+const Instituicao = mongoose.model('Instituicao', instituicaoSchema);
+
+const sugestaoSchema = new mongoose.Schema({
+  texto: String,
+  site: String,
+  usuario: String,
+  usuarioId: String,
+  createdAt: { type: Date, default: Date.now }
+});
+const Sugestao = mongoose.model('Sugestao', sugestaoSchema);
+                                
 function auth(req, res, next) {
   const header = req.headers.authorization || '';
   const token = header.replace('Bearer ', '');
@@ -1201,6 +1220,89 @@ app.post('/api/redefinir-senha', async (req, res) => {
 app.get('/', (req, res) => {
   res.json({ ok: true, msg: 'Dossiê Bíblico API online' });
 });
+
+// ========== INSTITUIÇÕES ==========
+app.get('/api/instituicoes', auth, async (req, res) => {
+  try {
+    const instituicoes = await Instituicao.find().sort({ ordem: 1, nome: 1 });
+    res.json({ ok: true, instituicoes });
+  } catch (e) {
+    console.log(e);
+    res.status(500).json({ erro: 'Erro ao listar instituições' });
+  }
+});
+
+app.put('/api/instituicoes', auth, async (req, res) => {
+  try {
+    if (!(await isAdmin(req.userId))) {
+      return res.status(403).json({ erro: 'Apenas administradores' });
+    }
+    const { instituicoes } = req.body;
+    if (!Array.isArray(instituicoes)) {
+      return res.status(400).json({ erro: 'Lista inválida' });
+    }
+    await Instituicao.deleteMany({});
+    if (instituicoes.length > 0) {
+      await Instituicao.insertMany(instituicoes.map((item, i) => ({
+        ...item,
+        ordem: i
+      })));
+    }
+    res.json({ ok: true });
+  } catch (e) {
+    console.log(e);
+    res.status(500).json({ erro: 'Erro ao salvar instituições' });
+  }
+});
+
+// ========== SUGESTÕES ==========
+app.get('/api/sugestoes', auth, async (req, res) => {
+  try {
+    if (!(await isAdmin(req.userId))) {
+      return res.status(403).json({ erro: 'Apenas administradores' });
+    }
+    const sugestoes = await Sugestao.find().sort({ createdAt: -1 });
+    res.json({ ok: true, sugestoes });
+  } catch (e) {
+    console.log(e);
+    res.status(500).json({ erro: 'Erro ao listar sugestões' });
+  }
+});
+
+app.post('/api/sugestoes', auth, async (req, res) => {
+  try {
+    const { texto, site } = req.body;
+    if (!texto || !String(texto).trim()) {
+      return res.status(400).json({ erro: 'Texto da sugestão é obrigatório' });
+    }
+    const user = await User.findById(req.userId);
+    const sugestao = await Sugestao.create({
+      texto: String(texto).trim(),
+      site: site || '',
+      usuario: user ? (user.nome || user.email) : 'Usuário',
+      usuarioId: String(req.userId),
+      createdAt: new Date()
+    });
+    res.json({ ok: true, sugestao });
+  } catch (e) {
+    console.log(e);
+    res.status(500).json({ erro: 'Erro ao criar sugestão' });
+  }
+});
+
+app.delete('/api/sugestoes/:id', auth, async (req, res) => {
+  try {
+    if (!(await isAdmin(req.userId))) {
+      return res.status(403).json({ erro: 'Apenas administradores' });
+    }
+    await Sugestao.findByIdAndDelete(req.params.id);
+    res.json({ ok: true });
+  } catch (e) {
+    console.log(e);
+    res.status(500).json({ erro: 'Erro ao excluir sugestão' });
+  }
+});
+
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log('Servidor rodando na porta ' + PORT);
