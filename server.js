@@ -1269,7 +1269,7 @@ app.put('/api/instituicoes', auth, async (req, res) => {
     console.log('PUT instituicoes erro:', e);
     res.status(500).json({ erro: 'Erro ao salvar instituições', detalhe: e.message });
   }
-});s
+});
 // ========== SUGESTÕES ==========
 app.get('/api/sugestoes', auth, async (req, res) => {
   try {
