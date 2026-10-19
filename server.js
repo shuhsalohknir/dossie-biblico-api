@@ -1224,37 +1224,52 @@ app.get('/', (req, res) => {
 // ========== INSTITUIÇÕES ==========
 app.get('/api/instituicoes', auth, async (req, res) => {
   try {
-    const instituicoes = await Instituicao.find().sort({ ordem: 1, nome: 1 });
+    const instituicoes = await Instituicao.find().sort({ ordem: 1 }).lean();
     res.json({ ok: true, instituicoes });
   } catch (e) {
-    console.log(e);
+    console.log('GET instituicoes erro:', e);
     res.status(500).json({ erro: 'Erro ao listar instituições' });
   }
 });
 
 app.put('/api/instituicoes', auth, async (req, res) => {
   try {
-    if (!(await isAdmin(req.userId))) {
+    const admin = await isAdmin(req.userId);
+    if (!admin) {
+      console.log('Tentativa de salvar instituições sem ser admin. userId:', req.userId);
       return res.status(403).json({ erro: 'Apenas administradores' });
     }
+
     const { instituicoes } = req.body;
     if (!Array.isArray(instituicoes)) {
       return res.status(400).json({ erro: 'Lista inválida' });
     }
-    await Instituicao.deleteMany({});
-    if (instituicoes.length > 0) {
-      await Instituicao.insertMany(instituicoes.map((item, i) => ({
-        ...item,
-        ordem: i
-      })));
-    }
-    res.json({ ok: true });
-  } catch (e) {
-    console.log(e);
-    res.status(500).json({ erro: 'Erro ao salvar instituições' });
-  }
-});
 
+    console.log('Salvando instituições:', instituicoes.length, 'itens');
+
+    await Instituicao.deleteMany({});
+
+    if (instituicoes.length > 0) {
+      const docs = instituicoes.map((item, i) => ({
+        id: item.id || String(Date.now() + i),
+        nome: item.nome || '',
+        tipo: item.tipo || '',
+        site: item.site || '',
+        pix: item.pix || '',
+        ordem: i
+      }));
+      await Instituicao.insertMany(docs);
+    }
+
+    const salvas = await Instituicao.find().sort({ ordem: 1 }).lean();
+    console.log('Instituições salvas no banco:', salvas.length);
+
+    res.json({ ok: true, instituicoes: salvas });
+  } catch (e) {
+    console.log('PUT instituicoes erro:', e);
+    res.status(500).json({ erro: 'Erro ao salvar instituições', detalhe: e.message });
+  }
+});s
 // ========== SUGESTÕES ==========
 app.get('/api/sugestoes', auth, async (req, res) => {
   try {
